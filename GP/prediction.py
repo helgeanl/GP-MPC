@@ -25,12 +25,25 @@ import pyDOE
 from scipy.optimize import minimize
 
 
+dir_data = '../Data/'
+dir_parameters = '../Parameters/'
+
+
 def covSEard(x, z, ell, sf2):
     """ GP squared exponential kernel """
     dist = 0
     for i in range(len(x)):
         dist = dist + (x[i] - z[i])**2 / (ell[i]**2)
     return sf2 * np.exp(-.5 * dist)
+
+
+def covSEard2(x, z, ell, sf2):
+    """ GP squared exponential kernel """
+    #dist = 0
+    #for i in range(ca.SX.size(x)[0]):
+    #    dist = dist + (x[i] - z[i])**2 / (ell[i]**2)
+    dist = ca.sum2((x - z)**2 / ell**2)
+    return sf2 * ca.MX.exp(-.5 * dist), dist
 
 
 def calc_cov_matrix(X, ell, sf2):
@@ -62,25 +75,28 @@ def gp(hyp, invK, X, Y, u):
     return mu, s2
 
 
-def gp_casadi(hyp, invK, X, Y, z):
-    ell = ca.MX(hyp[0:-3])
-    sf2 = ca.MX(hyp[-3]**2)
-    #X = ca.MX(X)
-    #Y = ca.MX(Y)
-    #u = ca.MX(u)
-    npoints = len(X)
-    kss = covSEard(z, z, ell, sf2)
-    ks = ca.MX.zeros(npoints, 1)
+def gp_casadi(invK, hyp, X, Y, z):
+    E = len(invK)
+    n = ca.MX.size(X[:, 1])[0]
+    D = ca.MX.size(X[1, :])[1]
 
-    for i in range(npoints):
-        ks[i] = covSEard(X[i, :], z, ell, sf2)
-    #ks = repmat()
-    ksK = ca.mtimes(ks.T, invK)
+    mean  = ca.MX.zeros(E, 1)
+    var  = ca.MX.zeros(E, 1)
+    for a in range(E):
+        ell = ca.MX(hyp[a, 0:D])
+        sf2 = ca.MX(hyp[a, D]**2)
+        kss, dist = covSEard2(z, z, ell, sf2)
+        ks = ca.MX.zeros(n, 1)
 
-    mu = ca.mtimes(ksK, Y)
-    s2 = kss - ca.mtimes(ksK, ks)
+        for i in range(n):
+            ks[i], dist = covSEard2(X[i, :], z, ell, sf2)
+        #ks = repmat()
+        ksK = ca.mtimes(ks.T, invK[a])
 
-    return mu, s2
+        mean[a] = ca.mtimes(ksK, Y[:, a])
+        var[a] = kss - ca.mtimes(ksK, ks)
+    
+    return mean, var, dist
 
 
 # -----------------------------------------------------------------------------
@@ -222,10 +238,14 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
 
     z_n = np.concatenate([x0, u])
     z_n.shape = (1, number_of_inputs)
-
     mu_n = np.zeros((simPoints, number_of_states))
     var_n = np.zeros((simPoints, number_of_states))
     covariance = np.zeros((number_of_inputs, number_of_inputs))
+
+    z_n2 = np.concatenate([x0, u])
+    z_n2.shape = (1, number_of_inputs)
+    mu_n2 = np.zeros((simPoints, number_of_states))
+    var_n2 = np.zeros((simPoints, number_of_states))
 
     D = number_of_inputs
     F = ca.MX.sym('F', npoints, number_of_states)
@@ -235,6 +255,7 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
     cov = ca.MX.sym('cov', covariance.shape)
 
     gp_EM = ca.Function('gp', [Xt, F, hyp, z, cov], GP_noisy_input(invK, Xt, F, hyp, D, z, cov))
+    gp_simple = ca.Function('gp_simple', [Xt, F, hyp, z], gp_casadi(invK, hyp, Xt, F, z))
 
     for dt in range(simPoints):
         mu, cov = gp_EM.call([X, Y, hyper, z_n, covariance])
@@ -243,6 +264,13 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
         mu_n[dt, :], var_n[dt, :] = mu, np.diag(cov)
         z_n = ca.vertcat(mu, u).T
         covariance[:number_of_states, :number_of_states] = cov
+
+    for dt in range(simPoints):
+        mu, var, dist = gp_simple.call([X, Y, hyper, z_n2])
+        mu, var = mu.full(), var.full()
+        mu.shape, var.shape = (number_of_states), (number_of_states)
+        mu_n2[dt, :], var_n2[dt, :] = mu, var
+        z_n2 = ca.vertcat(mu, u).T
 
     t = np.linspace(0.0, simTime, simPoints)
     u_matrix = np.zeros((simPoints, 2))
@@ -255,36 +283,58 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
     for i in range(number_of_states):
         plt.subplot(2, 2, i + 1)
         mu = mu_n[:, i]
-        plt.plot(t, Y_sim[:, i], 'b-')
-        plt.plot(t, mu, 'r--')
+        mu2 = mu_n2[:, i]
+
         sd = np.sqrt(var_n[:, i])
         plt.gca().fill_between(t.flat, mu - 2 * sd, mu + 2 * sd, color="#dddddd")
+        sd2 = np.sqrt(var_n2[:, i])
+        plt.gca().fill_between(t.flat, mu2 - 2 * sd2, mu2 + 2 * sd2, color="#bbbbbb")
+        #plt.errorbar(t, mu, yerr=2 * sd)
+        plt.plot(t, Y_sim[:, i], 'b-')
+        plt.plot(t, mu, 'r--')
+        plt.plot(t, mu2, 'y--')
+
+        labels = ['Simulation', 'GP Excact moment', 'GP Mean Equivalence', '95% conf interval 1', '95% conf interval 2']
         plt.ylabel('Level in tank ' + str(i + 1) + ' [cm]')
-        plt.legend(['Simulation', 'Prediction', '95% conf interval'])
+        plt.legend(labels)
         plt.suptitle('Simulation and prediction', fontsize=16)
         plt.xlabel('Time [s]')
     plt.show()
-    return mu_n, var_n
+    return mu_n2, var_n2
 
 
 if __name__ == "__main__":
-    X = np.loadtxt('../Data/' + 'X_matrix_tank')
-    Y = np.loadtxt('../Data/' + 'Y_matrix_tank')
-    #hyper = np.loadtxt('Parameters/' + 'hyper_opt', delimiter=',')
+    X = np.loadtxt(dir_data + 'X_matrix_tank')
+    Y = np.loadtxt(dir_data + 'Y_matrix_tank')
+    optimize = False
+
     npoints = X.shape[0]
     invK = np.zeros((4, npoints, npoints))
-    hyper = np.zeros((4, 9))
-    n, D = X.shape
-    for i in range(4):
-        #invK[i, :, :] = np.loadtxt('invK' + str(i + 1), delimiter=',')
+    if optimize:
+        hyper = np.zeros((4, 9))
+        n, D = X.shape
+        for i in range(4):
+            hyper[i, :] = train_gp(X, Y[:, i], i)
+            K = calc_cov_matrix(X, hyper[i, :D], hyper[i, D]**2)
+            K = K + hyper[i, D + 1] * np.eye(n)  # Add noise variance to diagonal
+            K = (K + K.T) / 2   # Make sure matrix is symmentric
+            try:
+                L = np.linalg.cholesky(K)
+            except np.linalg.LinAlgError:
+                print("K matrix is not positive definit, adding jitter!")
+                K = K + np.eye(3) * 1e-8
+                L = np.linalg.cholesky(K)
+            invL = np.linalg.solve(L, np.eye(n))
+            invK[i, :, :] = np.linalg.solve(L.T, invL)    # np.linalg.inv(K)
+            np.savetxt(dir_parameters + 'invK' + str(i + 1), invK[i, :, :], delimiter=',')
+        np.savetxt(dir_parameters + 'hyper_opt', hyper, delimiter=',')
 
-        hyper[i, :] = train_gp(X, Y[:, i], i)
-        K = calc_cov_matrix(X, hyper[i, :D], hyper[i, D]**2)
-        invK[i, :, :] = np.linalg.inv(K)
-        np.savetxt('../Parameters/' + 'invK' + str(i + 1), invK[:, :, i], delimiter=',')
-    np.savetxt('../Parameters/' + 'hyper_opt', hyper, delimiter=',')
+    else:
+        hyper = np.loadtxt(dir_parameters + 'hyper_opt', delimiter=',')
+        for i in range(4):
+            invK[i, :, :] = np.loadtxt(dir_parameters + 'invK' + str(i + 1), delimiter=',')
 
     u = np.array([50, 50])
     x0 = np.array([10, 20, 30, 40])
     mu, var  = predict_casadi(X, Y, invK, hyper, x0, u)
-    mu2, var2  = predict(X, Y, invK, hyper, x0, u)
+    #mu2, var2  = predict(X, Y, invK, hyper, x0, u)
