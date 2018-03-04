@@ -390,7 +390,7 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
 if __name__ == "__main__":
     X = np.loadtxt(dir_data + 'X_matrix_tank')
     Y = np.loadtxt(dir_data + 'Y_matrix_tank')
-    optimize = True
+    optimize = False
 
     npoints = X.shape[0]
     invK = np.zeros((4, npoints, npoints))
@@ -418,7 +418,7 @@ if __name__ == "__main__":
         for i in range(4):
             invK[i, :, :] = np.loadtxt(dir_parameters + 'invK' + str(i + 1), delimiter=',')
 
-    u = np.array([50, 50])
-    x0 = np.array([10, 20, 30, 40])
-    #mu, var  = predict_casadi(X, Y, invK, hyper, x0, u)
-    mu2, var2  = predict(X, Y, invK, hyper, x0, u)
+    u = np.array([40, 50])
+    x0 = np.array([20, 80, 10, 40])
+    mu, var  = predict_casadi(X, Y, invK, hyper, x0, u)
+    #mu2, var2  = predict(X, Y, invK, hyper, x0, u)
