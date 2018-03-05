@@ -34,6 +34,8 @@ def covSEard(x, z, ell, sf2):
     dist = 0
     for i in range(len(x)):
         dist = dist + (x[i] - z[i])**2 / (ell[i]**2)
+    #dist = np.sum((x - z)**2 / ell**2)
+    
     return sf2 * np.exp(-.5 * dist)
 
 
@@ -53,6 +55,17 @@ def calc_cov_matrix(X, ell, sf2):
     for i in range(D):
         x = X[:, i].reshape(n, 1)
         dist = (np.sum(x**2, 1).reshape(-1, 1) + np.sum(x**2, 1) -
+                2 * np.dot(x, x.T)) / ell[i]**2 + dist
+    return sf2 * np.exp(-.5 * dist)
+
+
+def calc_cov_matrix_casadi(X, ell, sf2):
+    """ GP squared exponential kernel """
+    dist = 0
+    n, D = ca.SX.size(X)
+    for i in range(D):
+        x = X[:, i].reshape(n, 1)
+        dist = (ca.sum2(x**2, 1).reshape(-1, 1) + np.sum(x**2, 1) -
                 2 * np.dot(x, x.T)) / ell[i]**2 + dist
     return sf2 * np.exp(-.5 * dist)
 
@@ -115,9 +128,15 @@ def calc_NLL(hyper, X, Y):
     K   = np.zeros((n, n))
 
     K = calc_cov_matrix(X, ell, sf2)
+    
+    #for i in range(n):
+    #    for j in range(n):
+    #        K[i, j] = covSEard(X[i, :], X[j, :], ell, sf2)
+ 
     K = K + lik * np.eye(n)
-
+    
     K = (K + K.T) / 2   # Make sure matrix is symmentric
+    
     try:
         L = np.linalg.cholesky(K)
     except np.linalg.LinAlgError:
@@ -136,8 +155,7 @@ def calc_NLL(hyper, X, Y):
 def calc_NLL_casadi(hyper, X, Y):
     """ Objective function """
     # Calculate NLL
-    n = ca.MX.size(X[:, 1])[0]
-    D = ca.MX.size(X[1, :])[1]
+    n, D = ca.MX.size(X)
 
     ell = hyper[:D]
     sf2 = hyper[D]**2
@@ -149,17 +167,19 @@ def calc_NLL_casadi(hyper, X, Y):
             K[i, j] = covSEard2(X[i, :], X[j, :], ell, sf2)
 
     K = K + lik * ca.MX.eye(n)
-
+    
     K = (K + K.T) / 2   # Make sure matrix is symmentric
+    
     A = ca.SX.sym('A', ca.MX.size(K))
     #L = ca.chol(A)      # Should check for PD !!!
     cholesky = ca.Function('Cholesky', [A], [ca.chol(A)])
-    L = cholesky(K)
+    L = cholesky(K).T
+
     logK = 2 * ca.sum1(ca.MX.log(ca.fabs(ca.diag(L))))
 
     invLy = ca.solve(L, Y)
     alpha = ca.solve(L.T, invLy)
-    NLL = 0.5 * ca.mtimes(Y.T, alpha) + 0.5 * logK + n / 2 * ca.log(2 * ca.pi)
+    NLL = 0.5 * ca.mtimes(Y.T, alpha) + 0.5 * logK + n / 2 * ca.log(2 * ca.pi)  #- log_priors
     return NLL
 
 
@@ -236,17 +256,20 @@ def train_gp_casadi(X, Y, state):
     opts["verbose"] = True
     # opts["linear_solver"] = "ma57"
     # opts["hessian_approximation"] = "limited-memory"
-    multistart = 10
+    multistart = 2
 
     hyper_init = pyDOE.lhs(D + 3, samples=multistart, criterion='maximin')
 
-    F = ca.MX(Y)    # ca.SX.sym('F', npoints, number_of_states)
-    Xt = ca.MX(X)   # ca.SX.sym('X', npoints, number_of_inputs)
+    F =  ca.MX(Y) #ca.MX.sym('F', npoints, 1)
+    Xt = ca.MX(X) #ca.MX.sym('X', npoints, 6)
     hyp = ca.MX.sym('hyp', (1, D + 3))
 
-    #NLL = ca.Function('NLL', [Xt, F, hyp], calc_NLL_casadi(Xt, F, hyp))
+    #NLL = ca.Function('NLL', [hyp, Xt, F], [calc_NLL_casadi(hyp, Xt, F)])
+
     NLL = {'x': hyp, 'f': calc_NLL_casadi(hyp, Xt, F)}
     Solver = ca.nlpsol('Solver', 'ipopt', NLL, opts)
+    
+    #return NLL.call([hyper[0,:],X,Y]), calc_NLL(hyper[0,:], X, Y)
 
     # Scale control inputs to correct range
     obj = np.zeros((multistart, 1))
@@ -255,7 +278,8 @@ def train_gp_casadi(X, Y, state):
         hyper_init[i, :] = hyper_init[i, :] * (ub - lb) + lb
         hyper_init[i, D + 1] = 10**-3        # Noise
         hyper_init[i, D + 2] = meanF                # Mean of F
-
+        
+    
         res = Solver(x0=hyper_init[i, :], lbx=lb, ubx=ub)
         obj[i] = res['f']
         hyp_opt_loc[i, :] = res['x']
@@ -394,11 +418,14 @@ if __name__ == "__main__":
 
     npoints = X.shape[0]
     invK = np.zeros((4, npoints, npoints))
+    
+    #K1, K2 = train_gp_casadi(X, Y[:, 0], 0)
+    
     if optimize:
         hyper = np.zeros((4, 9))
         n, D = X.shape
         for i in range(4):
-            hyper[i, :] = train_gp(X, Y[:, i], i)
+            hyper[i, :] = train_gp_casadi(X, Y[:, i], i)
             K = calc_cov_matrix(X, hyper[i, :D], hyper[i, D]**2)
             K = K + hyper[i, D + 1]**2 * np.eye(n)  # Add noise variance to diagonal
             K = (K + K.T) / 2   # Make sure matrix is symmentric
@@ -417,8 +444,9 @@ if __name__ == "__main__":
         hyper = np.loadtxt(dir_parameters + 'hyper_opt', delimiter=',')
         for i in range(4):
             invK[i, :, :] = np.loadtxt(dir_parameters + 'invK' + str(i + 1), delimiter=',')
+            hyper[i, -1] = np.mean(Y[:, i])
 
-    u = np.array([40, 50])
-    x0 = np.array([20, 80, 10, 40])
+    u = np.array([50, 50])
+    x0 = np.array([38, 38, 38, 38])
     mu, var  = predict_casadi(X, Y, invK, hyper, x0, u)
     #mu2, var2  = predict(X, Y, invK, hyper, x0, u)

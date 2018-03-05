@@ -28,7 +28,7 @@ simTime = 300                           # Simulation time in seconds
 
 
 # Regression data
-npoints = 50                            # Number of data points generated
+npoints = 50                           # Number of data points generated
 u_min = np.array([0., 0.])              # lower bound of control inputs
 u_max = np.array([100., 100.])          # upper bound of control inputs
 x_min = np.array([0., 0., 0., 0.])      # lower bound of expected minimum state
