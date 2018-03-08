@@ -7,11 +7,11 @@ import numpy as np
 #import time
 #import math
 import matplotlib.pyplot as plt
-from pylab import array
+import pylab
 from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py27-v3.3.0")
 from casadi import SX, sqrt, vertcat, integrator
-from pyDOE import lhs
+import pyDOE
 
 
 # Specifications
@@ -73,7 +73,7 @@ def integrate_system(ndstate, nastate, u, t0, tf, x0):
     opts['tf'] = tf
     Sim = integrator('Sim', 'idas', dae, opts)
     res = Sim(x0=xDi)
-    x_current = array(res['xf'])
+    x_current = pylab.array(res['xf'])
 
     return x_current
 
@@ -119,7 +119,7 @@ def generate_training_data():
 
     # Create control input design using a latin hypecube
     # Latin hypercube design for unit cube [0,1]^ndstate
-    u_matrix = lhs(ninput, samples=npoints, criterion='maximin')
+    u_matrix = pyDOE.lhs(ninput, samples=npoints, criterion='maximin')
 
     # Scale control inputs to correct range
     for k in range(npoints):
@@ -127,7 +127,7 @@ def generate_training_data():
 
     # Create state input design using a latin hypecube
     # Latin hypercube design for unit cube [0,1]^ndstate
-    X_mat = lhs(ndstate, samples=npoints, criterion='maximin')
+    X_mat = pyDOE.lhs(ndstate, samples=npoints, criterion='maximin')
 
     # Scale state inputs to correct range
     for k in range(npoints):
