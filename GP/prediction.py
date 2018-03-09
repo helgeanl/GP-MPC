@@ -118,8 +118,9 @@ def gp_taylor_approx(invK, X, F, hyper, D, inputmean, inputcov):
     E     = len(invK)
     n     = ca.MX.size(F[:, 1])[0]
     mean  = ca.MX.zeros(E, 1)
-    var = ca.MX.zeros(E, 1)
+    var = ca.MX.zeros(D, 1)
     v     = X - ca.repmat(inputmean, n, 1)
+    covar = ca.MX.zeros(E, E)
     covariance = ca.MX.zeros(E, E)
     d_mean = ca.MX.zeros(E, 1)
     dd_var = ca.MX.zeros(E, E)
@@ -141,8 +142,8 @@ def gp_taylor_approx(invK, X, F, hyper, D, inputmean, inputcov):
         var[a] = kss - ca.mtimes(ks.T, invKks)
         d_mean[a] = ca.mtimes(ca.transpose(w[a] * v[:, a] * ks), alpha)
 
-    for d in range(D)
-        for e in range(D):
+    for d in range(E):
+        for e in range(E):
             dd_var1a = ca.mtimes(ca.transpose(v[:, d] * ks), iK)
             dd_var1b = ca.mtimes(dd_var1a, v[e] * ks)
             dd_var2 = ca.mtimes(ca.transpose(v[d] * v[e] * ks), invKks)
@@ -153,9 +154,9 @@ def gp_taylor_approx(invK, X, F, hyper, D, inputmean, inputcov):
     # covariance with noisy input
     for a in range(E):
         covar1 = ca.mtimes(d_mean, d_mean.T)
-        print(ca.MX.size(covar1))
-        covariance[a, a] = var[a] + ca.trace(ca.mtimes(inputcov, .5 * dd_var + covar1))
-
+        covar[0, 0] = inputcov[a]
+        covariance[a, a] = var[a] + ca.trace(ca.mtimes(covar, .5 * dd_var + covar1))
+        #covariance[a] = var[a] + ca.trace(ca.mtimes(inputcov, .5 * dd_var + covar1))
     return [mean, covariance]
 
 
@@ -419,7 +420,7 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
     hyp = ca.MX.sym('hyp', hyper.shape)
     z = ca.MX.sym('z', z_n.shape)
     cov = ca.MX.sym('cov', covariance.shape)
-    cov2 = ca.MX.sym('cov2', covariance2.shape)
+    cov2 = ca.MX.sym('cov2', 4, 1)
 
     gp_EM = ca.Function('gp', [Xt, F, hyp, z, cov], GP_noisy_input(invK, Xt, F, hyp, D, z, cov))
     gp_TA = ca.Function('gp_taylor_approx', [Xt, F, hyp, z, cov2], gp_taylor_approx(invK, Xt, F, hyp, D, z, cov2))
@@ -440,7 +441,7 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
         mu_n2[dt, :], var_n2[dt, :] = mu, var
         z_n2 = ca.vertcat(mu, u).T
 
-    covar2 = np.zeros((4, 4))
+    covar2 = np.zeros((4, 1))
     for dt in range(simPoints):
         mu, cov = gp_TA.call([X, Y, hyper, z_n3, covar2])
         mu, cov = mu.full(), cov.full()
@@ -448,7 +449,7 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
         mu3_n[dt, :], var3_n[dt, :] = mu, np.diag(cov)
         z_n3 = ca.vertcat(mu, u).T
         #covariance[:number_of_states, :number_of_states] = cov
-        covar2 = cov
+        covar2 = np.diag(cov)
 
     t = np.linspace(0.0, simTime, simPoints)
     u_matrix = np.zeros((simPoints, 2))
@@ -460,23 +461,27 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
     plt.clf()
     for i in range(number_of_states):
         plt.subplot(2, 2, i + 1)
-        mu = mu_n[:, i]
+        mu1 = mu_n[:, i]
         mu2 = mu_n2[:, i]
         mu3 = mu3_n[:, i]
 
         sd = np.sqrt(var_n[:, i])
-        plt.gca().fill_between(t.flat, mu - 2 * sd, mu + 2 * sd, color="#dddddd")
-        sd2 = np.sqrt(var_n2[:, i])
-        plt.gca().fill_between(t.flat, mu2 - 2 * sd2, mu2 + 2 * sd2, color="#bbbbbb")
+        plt.gca().fill_between(t.flat, mu1 - 2 * sd, mu1 + 2 * sd, color="#555555")
+
         sd2 = np.sqrt(var3_n[:, i])
-        plt.gca().fill_between(t.flat, mu3 - 2 * sd2, mu3 + 2 * sd2, color="#aaaaaa")
+        plt.gca().fill_between(t.flat, mu3 - 2 * sd2, mu3 + 2 * sd2, color="#FFFaaa")
+
+        sd2 = np.sqrt(var_n2[:, i])
+        plt.gca().fill_between(t.flat, mu2 - 2 * sd2, mu2 + 2 * sd2, color="#bbbbbb", alpha=.9)
+
         #plt.errorbar(t, mu, yerr=2 * sd)
         plt.plot(t, Y_sim[:, i], 'b-')
-        plt.plot(t, mu, 'r--')
+        plt.plot(t, mu1, 'r--')
         plt.plot(t, mu2, 'y--')
         plt.plot(t, mu3, 'k--')
 
-        labels = ['Simulation', 'GP Excact moment', 'GP Mean Equivalence', '95% conf interval 1', '95% conf interval 2']
+        labels = ['Simulation', 'GP Excact moment', 'GP Mean Equivalence', 'GP Taylor Approx',
+                  '95% conf interval EM', '95% conf interval TA', '95% conf interval ME']
         plt.ylabel('Level in tank ' + str(i + 1) + ' [cm]')
         plt.legend(labels)
         plt.suptitle('Simulation and prediction', fontsize=16)
