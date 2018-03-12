@@ -47,6 +47,15 @@ def covSEard2(x, z, ell, sf2):
     return sf2 * ca.MX.exp(-.5 * dist)
 
 
+def covSEard3(x, z, ell, sf2):
+    """ GP squared exponential kernel """
+    #dist = 0
+    #for i in range(ca.SX.size(x)[0]):
+    #    dist = dist + (x[i] - z[i])**2 / (ell[i]**2)
+    dist = ca.sum2((x - z)**2 / ell**2)
+    return sf2 * ca.SX.exp(-.5 * dist)
+
+
 def calc_cov_matrix(X, ell, sf2):
     """ GP squared exponential kernel """
     dist = 0
@@ -98,16 +107,16 @@ def gp_casadi(invK, hyp, X, Y, z):
     for a in range(E):
         ell = ca.MX(hyp[a, 0:D])
         sf2 = ca.MX(hyp[a, D]**2)
-        m = 0 #hyp[a, D + 2]
+        #m = hyp[a, D + 2]
         kss = covSEard2(z, z, ell, sf2)
         ks = ca.MX.zeros(n, 1)
 
         for i in range(n):
-            ks[i] = covSEard2(X[i, :] - m, z - m, ell, sf2)
+            ks[i] = covSEard2(X[i, :], z, ell, sf2)
         #ks = repmat()
         ksK = ca.mtimes(ks.T, invK[a])
 
-        mean[a] = ca.mtimes(ksK, Y[:, a] - m) + m
+        mean[a] = ca.mtimes(ksK, Y[:, a])
         var[a] = kss - ca.mtimes(ksK, ks)
 
     return mean, var
@@ -142,8 +151,8 @@ def gp_taylor_approx(invK, X, F, hyper, D, inputmean, inputcov):
         var[a] = kss - ca.mtimes(ks.T, invKks)
         d_mean[a] = ca.mtimes(ca.transpose(w[a] * v[:, a] * ks), alpha)
 
-    for d in range(E):
-        for e in range(E):
+    for d in range(1):
+        for e in range(1):
             dd_var1a = ca.mtimes(ca.transpose(v[:, d] * ks), iK)
             dd_var1b = ca.mtimes(dd_var1a, v[e] * ks)
             dd_var2 = ca.mtimes(ca.transpose(v[d] * v[e] * ks), invKks)
@@ -156,6 +165,7 @@ def gp_taylor_approx(invK, X, F, hyper, D, inputmean, inputcov):
         covar1 = ca.mtimes(d_mean, d_mean.T)
         covar[0, 0] = inputcov[a]
         covariance[a, a] = var[a] + ca.trace(ca.mtimes(covar, .5 * dd_var + covar1))
+        #covariance[a, a] = var[a] + covar[0, 0] * .5 * dd_var[0, 0] + ca.trace(covar1)
         #covariance[a] = var[a] + ca.trace(ca.mtimes(inputcov, .5 * dd_var + covar1))
     return [mean, covariance]
 
@@ -197,31 +207,34 @@ def calc_NLL(hyper, X, Y):
 def calc_NLL_casadi(hyper, X, Y):
     """ Objective function """
     # Calculate NLL
-    n, D = ca.MX.size(X)
-
+    n, D = ca.SX.size(X)
+    
     ell = hyper[:D]
     sf2 = hyper[D]**2
     lik = hyper[D + 1]**2
-    m   = hyper[D + 2]
-    K   = ca.MX.zeros(n, n)
+    if ca.SX.size(hyper)[0] == 9:
+        m   = hyper[D + 2]
+    else:
+        m = 0
+    K   = ca.SX.zeros(n, n)
 
     for i in range(n):
         for j in range(n):
-            K[i, j] = covSEard2(X[i, :] - m, X[j, :] - m, ell, sf2)
+            K[i, j] = covSEard3(X[i, :], X[j, :], ell, sf2)
 
-    K = K + lik * ca.MX.eye(n)
+    K = K + lik * ca.SX.eye(n)
     K = (K + K.T) * 0.5   # Make sure matrix is symmentric
 
-    A = ca.SX.sym('A', ca.MX.size(K))
+   # A = ca.SX.sym('A', ca.MX.size(K))
     #L = ca.chol(A)      # Should check for PD !!!
-    cholesky = ca.Function('Cholesky', [A], [ca.chol(A)])
-    L = cholesky(K).T
+    #cholesky = ca.Function('Cholesky', [A], [ca.chol(A)])
+    #L = cholesky(K).T
+    L = ca.chol(K).T
+    logK = 2 * ca.sum1(ca.SX.log(ca.fabs(ca.diag(L))))
 
-    logK = 2 * ca.sum1(ca.MX.log(ca.fabs(ca.diag(L))))
-
-    invLy = ca.solve(L, Y - m)
+    invLy = ca.solve(L, Y)
     alpha = ca.solve(L.T, invLy)
-    NLL = 0.5 * ca.mtimes(Y.T - m, alpha) + 0.5 * logK + n * 0.5 * ca.log(2 * ca.pi)   # - log_priors
+    NLL = 0.5 * ca.mtimes(Y.T, alpha) + 0.5 * logK + n * 0.5 * ca.log(2 * ca.pi)   # - log_priors
     return NLL
 
 
@@ -260,13 +273,13 @@ def train_gp(X, Y, state):
     hyp_opt_loc = np.zeros((multistart, D + h))
     for i in range(multistart):
         hyper_init[i, :] = hyper_init[i, :] * (ub - lb) + lb
-        hyper_init[i, D + 1] = 10**-3        # Noise
+        hyper_init[i, D + 1] = 10**-3      # Noise
         #hyper_init[i, D + 2] = meanF                # Mean of F
 
         res = minimize(calc_NLL, np.log(hyper_init[i, :]), args=(X, Y),
                        method='SLSQP', options=options, bounds=np.log(bounds), tol=10**-12)
         obj[i] = res.fun
-        hyp_opt_loc[i, :] = np.exp(res.x)
+        hyp_opt_loc[i, :] = res.x
     hyp_opt = hyp_opt_loc[np.argmin(obj)]
 
     return hyp_opt
@@ -280,19 +293,22 @@ def train_gp_casadi(X, Y, state, meanFunc=0):
     stdX = np.std(X[:, state])
     stdF = np.std(Y)
     meanF = np.mean(Y)
-    lb = np.zeros(D + 3)
-    ub = np.zeros(D + 3)
-    lb[:D]    = stdX / 3
-    ub[:D]    = stdX * 3
-    lb[D]     = stdF / 3
-    ub[D]     = stdF * 3
-    lb[D + 1] = 10**-3 / 10
-    ub[D + 1] = 10**-3 * 10
 
     if meanFunc == 0:
-        lb[D + 2] = 0
-        ub[D + 2] = 100
-    elif meanFunc == 'const':
+        h = 2
+    else:
+        h = 3
+
+    lb = np.zeros(D + h)
+    ub = np.zeros(D + h)
+    lb[:D]    = stdX / 200
+    ub[:D]    = stdX * 200
+    lb[D]     = stdF / 200
+    ub[D]     = stdF * 200
+    lb[D + 1] = 10**-3 / 100
+    ub[D + 1] = 10**-3 * 100
+
+    if meanFunc == 'const':
         lb[D + 2] = meanF / 5
         ub[D + 2] = meanF * 5
 
@@ -300,43 +316,38 @@ def train_gp_casadi(X, Y, state, meanFunc=0):
 
     # NLP solver options
     opts = {}
-    #opts["expand"] = True
+    opts["expand"] = True
     #opts["max_iter"] = 100
-    opts["verbose"] = True
+    opts["verbose"] = False
     # opts["linear_solver"] = "ma57"
     # opts["hessian_approximation"] = "limited-memory"
     multistart = 2
 
-    hyper_init = pyDOE.lhs(D + 3, samples=multistart, criterion='maximin')
+    hyper_init = pyDOE.lhs(D + h, samples=multistart, criterion='maximin')
 
-    F   = ca.MX(Y)  # ca.MX.sym('F', npoints, 1)
-    Xt  = ca.MX(X)  # ca.MX.sym('X', npoints, 6)
-    hyp = ca.MX.sym('hyp', (1, D + 3))
+    F   = ca.SX(Y)  # ca.MX.sym('F', npoints, 1)
+    Xt  = ca.SX(X)  # ca.MX.sym('X', npoints, 6)
+    hyp = ca.SX.sym('hyp', (1, D + h))
 
-    #NLL = ca.Function('NLL', [hyp, Xt, F], [calc_NLL_casadi(hyp, Xt, F)])
-
+    #NLL_mx = ca.Function('NLL', [hyp], [calc_NLL_casadi(hyp, Xt, F)])
+    #NLL_SX = NLL_mx.expand()
     NLL = {'x': hyp, 'f': calc_NLL_casadi(hyp, Xt, F)}
     Solver = ca.nlpsol('Solver', 'ipopt', NLL, opts)
-    #return NLL.call([hyper[0,:],X,Y]), calc_NLL(hyper[0,:], X, Y)
 
     # Scale control inputs to correct range
     obj = np.zeros((multistart, 1))
-    hyp_opt_loc = np.zeros((multistart, D + 3))
+    hyp_opt_loc = np.zeros((multistart, D + h))
+    hyp_opt = np.zeros((D + h))
+
     for i in range(multistart):
         hyper_init[i, :] = hyper_init[i, :] * (ub - lb) + lb
         hyper_init[i, D + 1] = 10**-3        # Noise
-        if meanFunc == 0:
-            hyper_init[i, D + 2] = 0
-        elif meanFunc == 'const':
-            hyper_init[i, D + 2] = meanF          # Mean of F
+        if meanFunc == 'const':
+            hyper_init[i, D + 2] = meanF     # Mean of F
         res = Solver(x0=hyper_init[i, :], lbx=lb, ubx=ub)
         obj[i] = res['f']
         hyp_opt_loc[i, :] = res['x']
-    hyp_opt = res['x']  # hyp_opt_loc[np.argmin(obj)]
-
-    # Zero mean
-    #if mean == 0:
-    #    hyp_opt[:, D + 2] = 0
+    hyp_opt[:D + h] = hyp_opt_loc[np.argmin(obj)]
 
     return hyp_opt
 
@@ -388,6 +399,12 @@ def predict(X, Y, invK, hyper, x0, u):
 
 
 def predict_casadi(X, Y, invK, hyper, x0, u):
+    
+    X = np.log(X)
+    Y = np.log(Y)
+    x0 = np.log(x0)
+    u = np.log(u)
+    
     # Predict future
     npoints = X.shape[0]
     number_of_states = len(invK)
@@ -412,7 +429,6 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
     z_n3.shape = (1, number_of_inputs)
     mu3_n = np.zeros((simPoints, number_of_states))
     var3_n = np.zeros((simPoints, number_of_states))
-    covariance2 = np.zeros((number_of_states, number_of_states))
 
     D = number_of_inputs
     F = ca.MX.sym('F', npoints, number_of_states)
@@ -455,26 +471,29 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
     u_matrix = np.zeros((simPoints, 2))
     u_matrix[:, 0] = u[0]
     u_matrix[:, 1] = u[1]
-    Y_sim = sim_system(x0, u_matrix, simTime, deltat)
+    Y_sim = sim_system(np.exp(x0), np.exp(u_matrix), simTime, deltat)
 
     plt.figure()
     plt.clf()
     for i in range(number_of_states):
         plt.subplot(2, 2, i + 1)
-        mu1 = mu_n[:, i]
-        mu2 = mu_n2[:, i]
-        mu3 = mu3_n[:, i]
+        mu1 = np.exp(mu_n[:, i])
+        mu2 = np.exp(mu_n2[:, i])
+        mu3 = np.exp(mu3_n[:, i])
 
-        sd = np.sqrt(var_n[:, i])
-        plt.gca().fill_between(t.flat, mu1 - 2 * sd, mu1 + 2 * sd, color="#555555")
+        sd1 = np.sqrt(np.exp(var_n[:, i]))
+        plt.gca().fill_between(t.flat, mu1 - 2 * sd1, mu1 + 2 * sd1, color="#555555")
 
-        sd2 = np.sqrt(var3_n[:, i])
-        plt.gca().fill_between(t.flat, mu3 - 2 * sd2, mu3 + 2 * sd2, color="#FFFaaa")
+        sd3 = np.sqrt(np.exp(var3_n[:, i]))
+        plt.gca().fill_between(t.flat, mu3 - 2 * sd3, mu3 + 2 * sd3, color="#FFFaaa")
 
-        sd2 = np.sqrt(var_n2[:, i])
-        plt.gca().fill_between(t.flat, mu2 - 2 * sd2, mu2 + 2 * sd2, color="#bbbbbb", alpha=.9)
+        sd2 = np.sqrt(np.exp(var_n2[:, i]))
+        #plt.gca().fill_between(t.flat, mu2 - 2 * sd2, mu2 + 2 * sd2, color="#bbbbbb", alpha=.9)
 
-        #plt.errorbar(t, mu, yerr=2 * sd)
+        #plt.errorbar(t, mu3, yerr=2 * sd3)
+        #plt.errorbar(t, mu1, yerr=2 * sd1)
+        #plt.errorbar(t, mu2, yerr=2 * sd2)
+
         plt.plot(t, Y_sim[:, i], 'b-')
         plt.plot(t, mu1, 'r--')
         plt.plot(t, mu2, 'y--')
@@ -506,8 +525,8 @@ if __name__ == "__main__":
         hyper = np.zeros((E, D + h))
         n, D = X.shape
         for i in range(E):
-            hyper[i, :] = train_gp(X, Y[:, i], i)  # train_gp_casadi(X, Y[:, i], i, meanFunc=0)
-            K = calc_cov_matrix(X - hyper[i, D + h - 1], hyper[i, :D], hyper[i, D]**2)
+            hyper[i, :] = train_gp(np.log(X), np.log(Y[:, i]), i)  #  train_gp_casadi(np.log(X), np.log(Y[:, i]), i, meanFunc=0)
+            K = calc_cov_matrix(np.log(X), hyper[i, :D], hyper[i, D]**2)
             K = K + hyper[i, D + 1]**2 * np.eye(n)  # Add noise variance to diagonal
             K = (K + K.T) * 0.5   # Make sure matrix is symmentric
             try:
@@ -527,7 +546,7 @@ if __name__ == "__main__":
             invK[i, :, :] = np.loadtxt(dir_parameters + 'invK' + str(i + 1), delimiter=',')
             #hyper[i, -1] = 0  # np.mean(Y[:, i])
 
-    u = np.array([50, 50])
+    u = np.array([90, 10])
     x0 = np.array([10, 20, 30, 40])
     mu, var  = predict_casadi(X, Y, invK, hyper, x0, u)
     #mu2, var2  = predict(X, Y, invK, hyper, x0, u)
