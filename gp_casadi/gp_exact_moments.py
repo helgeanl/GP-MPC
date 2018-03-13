@@ -1,23 +1,10 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Thu Mar 08 14:11:20 2018
-
-@author: helgeanl
-"""
-
 # Function definitions for Gaussian Process Model Predictive Control
 from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py27-v3.3.0")
-
-#from scipy.stats import norm as norms
-#from pylab import *
-import numpy as np
-#import matplotlib.pyplot as plt
-#import math
 import casadi as ca
 
 
-def gp_taylor_approx(invK, X, F, hyper, D, inputmean, inputcov):
+def GP_noisy_input(invK, X, F, hyper, D, inputmean, inputcov):
     hyper = ca.MX.log(hyper)
     E     = len(invK)
     n     = ca.MX.size(F[:, 1])[0]
@@ -34,22 +21,6 @@ def gp_taylor_approx(invK, X, F, hyper, D, inputmean, inputcov):
     determinant = ca.Function('determinant', [A], [ca.exp(ca.trace(ca.log(R2)))])
 
     for a in range(E):
-        ell = hyper[a, :D]
-        w = 1/ell**2
-        sf2 = ca.MX(hyp[a, D]**2)
-
-        kss = covSEard2(z, z, ell, sf2)
-        ks = ca.MX.zeros(n, 1)
-
-        for i in range(n):
-            ks[i] = covSEard2(X[i, :] - m, z - m, ell, sf2)
-        #ks = repmat()
-        ksK = ca.mtimes(ks.T, invK[a])
-
-        mean[a] = ca.mtimes(ksK, Y[:, a] - m) + m
-        
-        
-        
         beta[:, a] = ca.mtimes(invK[a], F[:, a])
         iLambda   = ca.diag(ca.exp(-2 * hyper[a, :D]))
         R  = inputcov + ca.diag(ca.exp(2 * hyper[a, :D]))

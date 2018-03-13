@@ -113,8 +113,8 @@ if training is True:
         Y_matrix[un, :] = x_output + np.random.multivariate_normal(np.zeros((ndstate)), R)   # save simulated state with normal white noise added
 
     X_matrix = np.hstack([X_matrix, u_matrix])  # Concatenate inputs to obtain overall input to GP model
-    np.savetxt('../Data/' + 'X_matrix_reactor', X_matrix)          # Save input matrix  as text file
-    np.savetxt('../Data/' + 'Y_matrix_reactor', Y_matrix)          # Save output matrix as text file
+    np.savetxt('../data/' + 'X_matrix_reactor', X_matrix)          # Save input matrix  as text file
+    np.savetxt('../data/' + 'Y_matrix_reactor', Y_matrix)          # Save output matrix as text file
 
 
 # -----------------------------------------------------------------------------

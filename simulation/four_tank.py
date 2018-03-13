@@ -1,18 +1,13 @@
 # Generate simulation data for regression model
 
-# path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\Software\coinhsl-win32-openblas-2014.01.10")
-# from scipy.stats import norm as norms
-import numpy as np
-# import matplotlib.pyplot as plt
-#import time
-#import math
-import matplotlib.pyplot as plt
-import pylab
 from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py27-v3.3.0")
-from casadi import SX, sqrt, vertcat, integrator
-import pyDOE
 
+import pyDOE
+import pylab
+import numpy as np
+import casadi as ca
+import matplotlib.pyplot as plt
 
 # Specifications
 # Discrete Time Model
@@ -52,16 +47,16 @@ def integrate_system(ndstate, nastate, u, t0, tf, x0):
     gamma2 = 0.4
 
     # Differential states
-    xd = SX.sym("xd", ndstate)  # vector of states [h1,h2,h3,h4]
+    xd = ca.SX.sym("xd", ndstate)  # vector of states [h1,h2,h3,h4]
 
     # Initial conditions
     xDi = x0
 
-    ode = vertcat(
-        -a1 / A1 * sqrt(2 * g * xd[0]) + a3 / A1 * sqrt(2 * g * xd[2]) + gamma1 / A1 * u[0],
-        -a2 / A2 * sqrt(2 * g * xd[1]) + a4 / A2 * sqrt(2 * g * xd[3]) + gamma2 / A2 * u[1],
-        -a3 / A3 * sqrt(2 * g * xd[2]) + (1 - gamma2) / A3 * u[1],
-        -a4 / A4 * sqrt(2 * g * xd[3]) + (1 - gamma1) / A4 * u[0])
+    ode = ca.vertcat(
+        -a1 / A1 * ca.sqrt(2 * g * xd[0]) + a3 / A1 * ca.sqrt(2 * g * xd[2]) + gamma1 / A1 * u[0],
+        -a2 / A2 * ca.sqrt(2 * g * xd[1]) + a4 / A2 * ca.sqrt(2 * g * xd[3]) + gamma2 / A2 * u[1],
+        -a3 / A3 * ca.sqrt(2 * g * xd[2]) + (1 - gamma2) / A3 * u[1],
+        -a4 / A4 * ca.sqrt(2 * g * xd[3]) + (1 - gamma1) / A4 * u[0])
 
     dae = {'x': xd, 'ode': ode}
 
@@ -71,7 +66,7 @@ def integrate_system(ndstate, nastate, u, t0, tf, x0):
     opts['reltol'] = 1e-10  # rel. tolerance
     opts['t0'] = t0
     opts['tf'] = tf
-    Sim = integrator('Sim', 'idas', dae, opts)
+    Sim = ca.integrator('Sim', 'idas', dae, opts)
     res = Sim(x0=xDi)
     x_current = pylab.array(res['xf'])
 
@@ -155,8 +150,8 @@ def main():
     # -----------------------------------------------------------------------------
     if training is True:
         X_mat, Y_mat = generate_training_data()
-        np.savetxt('../Data/' + 'X_matrix_tank', X_mat)    # Save input matrix  as text file
-        np.savetxt('../Data/' + 'Y_matrix_tank', Y_mat)    # Save output matrix as text file
+        np.savetxt('../data/' + 'X_matrix_tank', X_mat)    # Save input matrix  as text file
+        np.savetxt('../data/' + 'Y_matrix_tank', Y_mat)    # Save output matrix as text file
 
     if sim is True:
         # Plot simulation
