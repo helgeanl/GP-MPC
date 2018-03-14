@@ -4,24 +4,27 @@ Created on Wed Feb 14 19:12:26 2018
 
 @author: Helge-André Langåker
 """
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
 
 from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py27-v3.3.0")
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\Software\coinhsl-win32-openblas-2014.01.10")
-#path.append(r"../Simulation")
+path.append(r"./GP_MPC/")
 
 #import time
 
 import numpy as np
 import casadi as ca
 import matplotlib.pyplot as plt
-from ..simulation.four_tank import sim_system
-from .gp_functions import gp, gp_exact_moment, gp_taylor_approx
-from noisyGP import GP_noisy_input
+from simulation.four_tank import sim_system
+from gp_casadi.gp_functions import gp, gp_exact_moment, gp_taylor_approx
+from gp_casadi.optimize import train_gp
+from gp_numpy.gp_functions import calc_cov_matrix
 
-
-dir_data = '../Data/'
-dir_parameters = '../Parameters/'
+dir_data = 'data/'
+dir_parameters = 'parameters/'
 
 
 # -----------------------------------------------------------------------------
@@ -82,7 +85,7 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
 
     simTime = 300
     deltat = 3
-    simPoints = simTime / deltat
+    simPoints = int(simTime / deltat)
 
     z_n = np.concatenate([x0, u])
     z_n.shape = (1, number_of_inputs)
@@ -109,9 +112,9 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
     cov = ca.MX.sym('cov', covariance.shape)
     cov2 = ca.MX.sym('cov2', 4, 1)
 
-    gp_EM = ca.Function('gp', [Xt, F, hyp, z, cov], GP_noisy_input(invK, Xt, F, hyp, D, z, cov))
+    gp_EM = ca.Function('gp', [Xt, F, hyp, z, cov], gp_exact_moment(invK, Xt, F, hyp, D, z, cov))
     gp_TA = ca.Function('gp_taylor_approx', [Xt, F, hyp, z, cov2], gp_taylor_approx(invK, Xt, F, hyp, z, cov2))
-    gp_simple = ca.Function('gp_simple', [Xt, F, hyp, z], gp_casadi(invK, hyp, Xt, F, z))
+    gp_simple = ca.Function('gp_simple', [Xt, F, hyp, z], gp(invK, hyp, Xt, F, z))
 
     for dt in range(simPoints):
         mu, cov = gp_EM.call([X, Y, hyper, z_n, covariance])
@@ -224,7 +227,7 @@ if __name__ == "__main__":
         n, D = X.shape
         for i in range(E):
             #hyper[i, :] = train_gp(X, Y[:, i], i)
-            hyper[i, :] = train_gp_casadi(X, Y[:, i], i, meanFunc=0)
+            hyper[i, :] = train_gp(X, Y[:, i], i, meanFunc='zero')
             K = calc_cov_matrix(X, hyper[i, :D], hyper[i, D]**2)
             K = K + hyper[i, D + 1]**2 * np.eye(n)  # Add noise variance to diagonal
             K = (K + K.T) * 0.5   # Make sure matrix is symmentric

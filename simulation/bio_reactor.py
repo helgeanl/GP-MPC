@@ -1,7 +1,8 @@
 # Generate simulation data for regression model
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
 
-# path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\Software\coinhsl-win32-openblas-2014.01.10")
-# from scipy.stats import norm as norms
 import numpy as np
 # import matplotlib.pyplot as plt
 #import time

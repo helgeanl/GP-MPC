@@ -1,4 +1,7 @@
 # Generate simulation data for regression model
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
 
 from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py27-v3.3.0")
@@ -77,7 +80,7 @@ def integrate_system(ndstate, nastate, u, t0, tf, x0):
 # Simulate and plot system
 # -----------------------------------------------------------------------------
 def sim_system(x0, u, simTime, deltat, noise=False):
-    simPoints = simTime / deltat
+    simPoints = int(simTime / deltat)
     # Predefine matrix to collect control inputs
     u_matrix = u
 

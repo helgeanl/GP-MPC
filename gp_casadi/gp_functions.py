@@ -18,7 +18,7 @@ import casadi as ca
 def covSEard(x, z, ell, sf2):
     """ GP squared exponential kernel """
     dist = ca.sum2((x - z)**2 / ell**2)
-    return sf2 * ca.SX.exp(-.5 * dist)
+    return sf2 * ca.MX.exp(-.5 * dist)
 
 
 def calc_cov_matrix_casadi(X, ell, sf2):

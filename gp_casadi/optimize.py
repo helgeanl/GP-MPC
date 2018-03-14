@@ -3,6 +3,9 @@
 Optimize hyperparameters
 @author: Helge-André Langåker
 """
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
 
 from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py27-v3.3.0")
@@ -117,14 +120,16 @@ def train_gp(X, Y, state, meanFunc='zero'):
 
     hyper_init = pyDOE.lhs(D + h, samples=multistart, criterion='maximin')
 
-    F   = ca.MX.sym('F', n, 1)
-    Xt  = ca.MX.sym('X', n, 6)
-    hyp = ca.MX.sym('hyp', (1, D + h))
+    #F   = ca.SX.sym('F', n, 1)
+    #Xt  = ca.SX.sym('X', n, 6)
+    F   = ca.SX(Y)
+    Xt  = ca.SX(X)
+    hyp = ca.SX.sym('hyp', (1, D + h))
 
-    NLL_func = ca.Function('NLL', [hyp], [calc_NLL(hyp, Xt, F)])
+    #NLL_func = ca.Function('NLL', [hyp], [calc_NLL(hyp, Xt, F)])
     #NLL_SX = NLL_mx.expand()
-    #NLL = {'x': hyp, 'f': calc_NLL(hyp, Xt, F)}
-    NLL = {'x': hyp, 'f': NLL_func(hyp, ca.MX(X), ca.MX(Y))}
+    NLL = {'x': hyp, 'f': calc_NLL(hyp, Xt, F)}
+    #NLL = {'x': hyp, 'f': NLL_func(hyp, ca.SX(X), ca.SX(Y))}
     Solver = ca.nlpsol('Solver', 'ipopt', NLL, opts)
 
     # Scale control inputs to correct range
