@@ -10,7 +10,6 @@ from __future__ import print_function
 
 from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py27-v3.3.0")
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\Software\coinhsl-win32-openblas-2014.01.10")
 path.append(r"./GP_MPC/")
 
 #import time
@@ -80,91 +79,91 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
 
     # Predict future
     npoints = X.shape[0]
-    number_of_states = len(invK)
-    number_of_inputs = X.shape[1]
-
+    num_states = len(invK)
+    num_inputs = X.shape[1]
+    print(num_inputs)
+    initVar = 0.001
     simTime = 300
-    deltat = 3
+    deltat = 30
     simPoints = int(simTime / deltat)
 
-    z_n = np.concatenate([x0, u])
-    z_n.shape = (1, number_of_inputs)
-    mu_EM = np.zeros((simPoints, number_of_states))
-    var_EM = np.zeros((simPoints, number_of_states))
+    #z_n = np.concatenate([x0, u]).reshape(1, number_of_inputs)
+    #z_n.shape = (1, number_of_inputs)
+    mu_EM = np.zeros((simPoints, num_states))
+    var_EM = np.zeros((simPoints, num_states))
     #covariance = np.zeros((number_of_inputs, number_of_inputs))
-    covariance = np.eye(number_of_inputs) * 0.1
+    covar_EM = np.eye(num_inputs) * initVar
 
-    z_n2 = np.concatenate([x0, u])
-    z_n2.shape = (1, number_of_inputs)
-    mu_ME = np.zeros((simPoints, number_of_states))
-    var_ME = np.zeros((simPoints, number_of_states))
+    #z_n2 = np.concatenate([x0, u])
+    #z_n2.shape = (1, number_of_inputs)
+    mu_ME = np.zeros((simPoints, num_states))
+    var_ME = np.zeros((simPoints, num_states))
 
-    z_n3 = np.concatenate([x0, u])
-    z_n3.shape = (1, number_of_inputs)
-    mu_TA = np.zeros((simPoints, number_of_states))
-    var_TA = np.zeros((simPoints, number_of_states))
+    #z_n3 = np.concatenate([x0, u])
+    #z_n3.shape = (1, number_of_inputs)
+    mu_TA = np.zeros((simPoints, num_states))
+    var_TA = np.zeros((simPoints, num_states))
 
-    D = number_of_inputs
-    F = ca.MX.sym('F', npoints, number_of_states)
-    Xt = ca.MX.sym('X', npoints, number_of_inputs)
+    F = ca.MX.sym('F', npoints, num_states)
+    Xt = ca.MX.sym('X', npoints, num_inputs)
     hyp = ca.MX.sym('hyp', hyper.shape)
-    z = ca.MX.sym('z', z_n.shape)
-    cov = ca.MX.sym('cov', covariance.shape)
-    cov2 = ca.MX.sym('cov2', 4, 1)
+    z = ca.MX.sym('z', 1, num_inputs)
+    cov = ca.MX.sym('cov', covar_EM.shape)
+    var = ca.MX.sym('var', num_states, 1)
 
-    gp_EM = ca.Function('gp', [Xt, F, hyp, z, cov], gp_exact_moment(invK, Xt, F, hyp, D, z, cov))
-    gp_TA = ca.Function('gp_taylor_approx', [Xt, F, hyp, z, cov2], gp_taylor_approx(invK, Xt, F, hyp, z, cov2))
+    gp_EM = ca.Function('gp', [Xt, F, hyp, z, cov],
+                        gp_exact_moment(invK, Xt, F, hyp, num_inputs, z, cov))
+    gp_TA = ca.Function('gp_taylor_approx', [Xt, F, hyp, z, var],
+                        gp_taylor_approx(invK, Xt, F, hyp, z, var))
     gp_simple = ca.Function('gp_simple', [Xt, F, hyp, z], gp(invK, hyp, Xt, F, z))
 
+    z = np.concatenate([x0, u]).reshape(1, num_inputs)
     for dt in range(simPoints):
-        mu, cov = gp_EM.call([X, Y, hyper, z_n, covariance])
-        mu, cov = mu.full(), cov.full()
-        mu.shape, cov.shape = (number_of_states), (number_of_states, number_of_states)
-        mu_EM[dt, :], var_EM[dt, :] = mu, np.diag(cov)
-        z_n = ca.vertcat(mu, u).T
-        covariance[:number_of_states, :number_of_states] = cov
+        mu, covar = gp_EM.call([X, Y, hyper, z, covar_EM])
+        mu, covar = mu.full(), covar.full()
+        mu.shape, covar.shape = (num_states), (num_states, num_states)
+        mu_EM[dt, :], var_EM[dt, :] = mu, np.diag(covar)
+        z = ca.vertcat(mu, u).T
+        covar_EM[:num_states, :num_states] = covar
 
-    #covar2 = np.zeros((4, 1))
-    covar2 = np.array([.1, .1, .1, .1])
+    z = np.concatenate([x0, u]).reshape(1, num_inputs)
+    var = np.array([1, 1, 1, 1]) * initVar
     for dt in range(simPoints):
-        mu, cov = gp_TA.call([X, Y, hyper, z_n3, covar2])
-        mu, cov = mu.full(), cov.full()
-        mu.shape, cov.shape = (number_of_states), (number_of_states, number_of_states)
-        mu_TA[dt, :], var_TA[dt, :] = mu, np.diag(cov)
-        z_n3 = ca.vertcat(mu, u).T
+        mu, covar = gp_TA.call([X, Y, hyper, z, var])
+        mu, covar = mu.full(), covar.full()
+        mu.shape, covar.shape = (num_states), (num_states, num_states)
+        mu_TA[dt, :], var_TA[dt, :] = mu, np.diag(covar)
+        z = ca.vertcat(mu, u).T
         #covariance[:number_of_states, :number_of_states] = cov
-        covar2 = np.diag(cov)
+        var = np.diag(covar)
 
+    z = np.concatenate([x0, u]).reshape(1, num_inputs)
     for dt in range(simPoints):
-        mu, var = gp_simple.call([X, Y, hyper, z_n2])
+        mu, var = gp_simple.call([X, Y, hyper, z])
         mu, var = mu.full(), var.full()
-        mu.shape, var.shape = (number_of_states), (number_of_states)
+        mu.shape, var.shape = (num_states), (num_states)
         mu_ME[dt, :], var_ME[dt, :] = mu, var
-        z_n2 = ca.vertcat(mu, u).T
+        z = ca.vertcat(mu, u).T
 
     t = np.linspace(0.0, simTime, simPoints)
     u_matrix = np.zeros((simPoints, 2))
-    u = np.array([50., 50.])
-    x0 = np.array([10., 20., 30., 40.])
+    #u = np.array([90., 10.])
+    #x0 = np.array([10., 90., 30., 40.])
     u_matrix[:, 0] = u[0]
     u_matrix[:, 1] = u[1]
     Y_sim = sim_system(x0, u_matrix, simTime, deltat)
 
-    #lby = np.array([0., 0., 0., 0.])
-    #uby = np.array([80., 80., 80., 80.])
-
     #mu_EM = scale_min_max_inverse(mu_EM, lby, uby)
     #mu_TA = scale_min_max_inverse(mu_TA, lby, uby)
     #mu_ME = scale_min_max_inverse(mu_ME, lby, uby)
-    mu_EM = scale_gaussian_inverse(mu_EM, meanY, stdY)
-    mu_TA = scale_gaussian_inverse(mu_TA, meanY, stdY)
-    mu_ME = scale_gaussian_inverse(mu_ME, meanY, stdY)
+    #mu_EM = scale_gaussian_inverse(mu_EM, meanY, stdY)
+    #mu_TA = scale_gaussian_inverse(mu_TA, meanY, stdY)
+    #mu_ME = scale_gaussian_inverse(mu_ME, meanY, stdY)
 
-
-    #var_n = scale_gaussian_inverse(var_n)
+    #var_EM = scale_gaussian_inverse(var_EM, 0, 1)
     plt.figure()
     plt.clf()
-    for i in range(number_of_states):
+    for i in range(num_states):
         plt.subplot(2, 2, i + 1)
         mu_EM_i = mu_EM[:, i]
         mu_TA_i = mu_TA[:, i]
@@ -179,14 +178,14 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
         sd_ME_i = np.sqrt(var_ME[:, i])
         plt.gca().fill_between(t.flat, mu_ME_i - 2 * sd_ME_i, mu_ME_i + 2 * sd_ME_i, color="#bbbbbb", alpha=.9)
 
-        #plt.errorbar(t, mu3, yerr=2 * sd3)
-        #plt.errorbar(t, mu1, yerr=2 * sd1)
-        #plt.errorbar(t, mu2, yerr=2 * sd2)
+        #plt.errorbar(t, mu_EM_i, yerr=2 * sd_EM_i)
+        #plt.errorbar(t, mu_TA_i, yerr=2 * sd_TA_i)
+        #plt.errorbar(t, mu_EM_i, yerr=2 * sd_ME_i)
 
         plt.plot(t, Y_sim[:, i], 'b-')
-        plt.plot(t, mu_EM_i, 'r--')
-        plt.plot(t, mu_TA_i, 'k--')
-        plt.plot(t, mu_ME_i, 'y--')
+        plt.plot(t, mu_EM_i, 'rx')
+        plt.plot(t, mu_TA_i, 'kx')
+        plt.plot(t, mu_ME_i, 'yx')
 
         labels = ['Simulation', 'GP Excact moment', 'GP Mean Equivalence', 'GP Taylor Approx',
                   '95% conf interval EM', '95% conf interval TA', '95% conf interval ME']
@@ -196,39 +195,52 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
         plt.xlabel('Time [s]')
         #plt.ylim([0, 40])
     plt.show()
-    return mu_EM, var_EM, covariance
+    return mu_EM, var_EM
 
 
 if __name__ == "__main__":
     X = np.loadtxt(dir_data + 'X_matrix_tank')
+
     Y = np.loadtxt(dir_data + 'Y_matrix_tank')
     optimize = True
     n, D = X.shape  # Number of sampling points and inputs
     E = Y.shape[1]  # Number of outputs
 
+    x1 = X[:, 0].reshape(n, 1)
+    x2 = X[:, 1].reshape(n, 1)
+    x3 = X[:, 2].reshape(n, 1)
+    x4 = X[:, 3].reshape(n, 1)
+    u1 = X[:, 4].reshape(n, 1)
+    u2 = X[:, 5].reshape(n, 1)
+    X1 = np.hstack((x1, x3, u1, u2))
+    X2 = np.hstack((x2, x4, u1, u2))
     invK = np.zeros((E, n, n))
     h = 2
     #K1, K2 = train_gp_casadi(X, Y[:, 0], 0)
    # X, Y = standardize(X, Y, [0, 0, 0, 0,0,0], [80, 80, 80, 80,100,100])
 
-    lbx = np.array([.0, .0, .0, .0, .0, .0])
+    lbx = np.array([.0, .0, .0,  .0, .0,  .0])
     ubx = np.array([80., 80., 80., 80., 100., 100.])
     lby = np.array([0., 0., 0., 0.])
     uby = np.array([80., 80., 80., 80.])
-    X = scale_min_max(X, lbx, ubx)
-    meanY = np.mean(Y)
-    stdY = np.std(Y)
-    Y = scale_min_max(Y, lby, uby)
+    #meanX = np.mean(X, 0)
+    #stdX = np.std(X, 0)
+    #X = scale_gaussian(X, meanX, stdX)
+    #X = scale_min_max(X, lbx, ubx)
+    #meanY = np.mean(Y, 0)
+    #stdY = np.std(Y, 0)
     #Y = scale_gaussian(Y, meanY, stdY)
+    #Y = scale_min_max(Y, lby, uby)
 
-
+    D = 4
     if optimize:
         hyper = np.zeros((E, D + h))
-        n, D = X.shape
+
         for i in range(E):
             #hyper[i, :] = train_gp(X, Y[:, i], i)
-            hyper[i, :] = train_gp(X, Y[:, i], i, meanFunc='zero')
-            K = calc_cov_matrix(X, hyper[i, :D], hyper[i, D]**2)
+            hyper[i, :] = train_gp(X1, Y[:, i], i, meanFunc='zero')
+    
+            K = calc_cov_matrix(X1, hyper[i, :D], hyper[i, D]**2)
             K = K + hyper[i, D + 1]**2 * np.eye(n)  # Add noise variance to diagonal
             K = (K + K.T) * 0.5   # Make sure matrix is symmentric
             try:
@@ -252,7 +264,8 @@ if __name__ == "__main__":
     x0 = np.array([10., 20., 30., 40.])
     z = np.concatenate([x0, u])
     #z = scaler.transform(z.reshape(1, -1))
-    z = scale_gaussian(z, meanY, stdY)
-    mu, var, covariance  = predict_casadi(X, Y, invK, hyper, z[:4], z[4:])
-    #mu, var  = predict_casadi(X, Y, invK, hyper, x0, u)
+    #z = scale_gaussian(z, meanX, stdX)
+    #z = scale_min_max(z, lbx, ubx)
+    #mu, var = predict_casadi(X1, Y, invK, hyper, z[:4], z[4:])
+    mu, var  = predict_casadi(X1, Y, invK, hyper, x0, u)
     #mu2, var2  = predict(X, Y, invK, hyper, x0, u)

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 # Copyright (c) 2018
 @author: Helge-André Langåker
@@ -8,7 +9,7 @@ from __future__ import print_function
 
 from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py27-v3.3.0")
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\Software\coinhsl-win32-openblas-2014.01.10")
+path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\Software\coinhsl-win32-openblas-2014")
 
 import pyDOE
 import numpy as np
@@ -34,8 +35,10 @@ def calc_cov_matrix(X, ell, sf2):
     n, D = X.shape
     for i in range(D):
         x = X[:, i].reshape(n, 1)
+        
         dist = (np.sum(x**2, 1).reshape(-1, 1) + np.sum(x**2, 1) -
                 2 * np.dot(x, x.T)) / ell[i]**2 + dist
+    print(np.dot(x, x.T).shape)
     return sf2 * np.exp(-.5 * dist)
 
 
@@ -54,8 +57,9 @@ def calc_NLL(hyper, X, Y):
     sf2 = hyper[D]**2
     lik = hyper[D + 1]**2
     #m   = hyper[D + 2]
-    K   = np.zeros((n, n))
+    #K   = np.zeros((n, n))
     K = calc_cov_matrix(X, ell, sf2)
+    print(K.shape)
     K = K + lik * np.eye(n)
     K = (K + K.T) * 0.5   # Make sure matrix is symmentric
     try:
@@ -93,9 +97,9 @@ def train_gp(X, Y, state):
     bounds = np.hstack((lb.reshape(D + h, 1), ub.reshape(D + h, 1)))
 
     options = {'disp': True, 'maxiter': 100}
-    multistart = 10
+    multistart = 1
 
-    hyper_init = pyDOE.lhs(D + h, samples=multistart, criterion='maximin')
+    hyper_init = pyDOE.lhs(D + h, samples=multistart)
 
     # Scale control inputs to correct range
     obj = np.zeros((multistart, 1))
@@ -110,5 +114,5 @@ def train_gp(X, Y, state):
         obj[i] = res.fun
         hyp_opt_loc[i, :] = res.x
     hyp_opt = hyp_opt_loc[np.argmin(obj)]
-
+    print("numpy")
     return hyp_opt

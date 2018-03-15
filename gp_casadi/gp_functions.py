@@ -9,7 +9,6 @@ from __future__ import print_function
 
 from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py27-v3.3.0")
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\Software\coinhsl-win32-openblas-2014.01.10")
 
 import numpy as np
 import casadi as ca
@@ -26,10 +25,11 @@ def calc_cov_matrix_casadi(X, ell, sf2):
     dist = 0
     n, D = ca.SX.size(X)
     for i in range(D):
-        x = X[:, i].reshape(n, 1)
-        dist = (ca.sum2(x**2, 1).reshape(-1, 1) + np.sum(x**2, 1) -
-                2 * np.dot(x, x.T)) / ell[i]**2 + dist
-    return sf2 * np.exp(-.5 * dist)
+        x = X[:, i].reshape((n, 1))
+        dist = (ca.sum2(x**2).reshape((-1, 1)) + ca.sum2(x**2) -
+                2 * ca.dot(x, x.T)) / ell[i]**2 + dist
+    print("K function")
+    return sf2 * ca.SX.exp(-.5 * dist)
 
 
 def gp(invK, hyp, X, Y, z):
