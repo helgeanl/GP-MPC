@@ -34,21 +34,27 @@ def calc_NLL(hyper, X, Y):
     # Returns:
         NLL: The negative log likelihood function (scalar)
     """
-
+    
     # Calculate NLL
     n, D = ca.SX.size(X)
-    print(D)
-    ell = hyper[:D]
-    sf2 = hyper[D]
-    sn = hyper[D + 1]
+    ell2 = hyper[:D]**2
+    sf2 = hyper[D]**2
+    sn2 = hyper[D + 1]**2
 
     K   = ca.SX(n, n)
     for i in range(n):
         for j in range(n):
-            dist = ca.sum2((X[i, :] - X[j, :])**2 * ell)
+            dist = ca.sum2((X[i, :] - X[j, :])**2 * ell2)
             K[i, j] = sf2 * ca.SX.exp(-.5 * dist)
+    
+#    for i in range(D):
+#        x = X[:, i].reshape((n, 1))
+#        x2 = x**2
+#        dist = (ca.repmat(ca.sum2(x2).reshape((-1, 1)) + ca.sum2(x2), 1, n) -
+#                2 * ca.mtimes(x, x.T)) / ell2[i]
 
-    K = K + sn * ca.SX.eye(n)
+    K = sf2 * ca.exp(-.5 * dist)
+    K = K + sn2 * ca.SX.eye(n)
     K = (K + K.T) * 0.5   # Make sure matrix is symmentric
 
     L = ca.chol(K).T
@@ -92,12 +98,12 @@ def train_gp(X, Y, state, meanFunc='zero'):
 
     lb = np.zeros(D + h)
     ub = np.zeros(D + h)
-    lb[:D]    = stdX / 10
-    ub[:D]    = stdX * 10
-    lb[D]     = stdF / 10
-    ub[D]     = stdF * 10
-    lb[D + 1] = 10**-3 / 10
-    ub[D + 1] = 10**-3 * 10
+    lb[:D]    = stdX / 20
+    ub[:D]    = stdX * 20
+    lb[D]     = stdF / 20
+    ub[D]     = stdF * 20
+    lb[D + 1] = 10**-5 / 10
+    ub[D + 1] = 10**-5 * 10
 
     if meanFunc == 'const':
         lb[D + 2] = meanF / 5
@@ -137,7 +143,7 @@ def train_gp(X, Y, state, meanFunc='zero'):
 
     for i in range(multistart):
         hyper_init[i, :] = hyper_init[i, :] * (ub - lb) + lb
-        hyper_init[i, D + 1] = 10**-3        # Noise
+        hyper_init[i, D + 1] = 10**-5        # Noise
 
         if meanFunc == 'const':
             hyper_init[i, D + 2] = meanF     # Mean of F

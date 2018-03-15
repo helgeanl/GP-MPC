@@ -28,7 +28,6 @@ def calc_cov_matrix_casadi(X, ell, sf2):
         x = X[:, i].reshape((n, 1))
         dist = (ca.sum2(x**2).reshape((-1, 1)) + ca.sum2(x**2) -
                 2 * ca.dot(x, x.T)) / ell[i]**2 + dist
-    print("K function")
     return sf2 * ca.SX.exp(-.5 * dist)
 
 

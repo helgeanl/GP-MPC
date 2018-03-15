@@ -147,8 +147,8 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
 
     t = np.linspace(0.0, simTime, simPoints)
     u_matrix = np.zeros((simPoints, 2))
-    #u = np.array([90., 10.])
-    #x0 = np.array([10., 90., 30., 40.])
+    u = np.array([90., 10.])
+    x0 = np.array([10., 90., 30., 40.])
     u_matrix[:, 0] = u[0]
     u_matrix[:, 1] = u[1]
     Y_sim = sim_system(x0, u_matrix, simTime, deltat)
@@ -156,9 +156,9 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
     #mu_EM = scale_min_max_inverse(mu_EM, lby, uby)
     #mu_TA = scale_min_max_inverse(mu_TA, lby, uby)
     #mu_ME = scale_min_max_inverse(mu_ME, lby, uby)
-    #mu_EM = scale_gaussian_inverse(mu_EM, meanY, stdY)
-    #mu_TA = scale_gaussian_inverse(mu_TA, meanY, stdY)
-    #mu_ME = scale_gaussian_inverse(mu_ME, meanY, stdY)
+    mu_EM = scale_gaussian_inverse(mu_EM, meanY, stdY)
+    mu_TA = scale_gaussian_inverse(mu_TA, meanY, stdY)
+    mu_ME = scale_gaussian_inverse(mu_ME, meanY, stdY)
 
     #var_EM = scale_gaussian_inverse(var_EM, 0, 1)
     plt.figure()
@@ -170,13 +170,12 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
         mu_ME_i = mu_ME[:, i]
 
         sd_EM_i = np.sqrt(var_EM[:, i])
-        plt.gca().fill_between(t.flat, mu_EM_i - 2 * sd_EM_i, mu_EM_i + 2 * sd_EM_i, color="#555555")
-
         sd_TA_i = np.sqrt(var_TA[:, i])
-        plt.gca().fill_between(t.flat, mu_TA_i - 2 * sd_TA_i, mu_TA_i + 2 * sd_TA_i, color="#FFFaaa")
-
         sd_ME_i = np.sqrt(var_ME[:, i])
-        plt.gca().fill_between(t.flat, mu_ME_i - 2 * sd_ME_i, mu_ME_i + 2 * sd_ME_i, color="#bbbbbb", alpha=.9)
+
+        plt.gca().fill_between(t.flat, mu_EM_i - 2 * sd_EM_i, mu_EM_i + 2 * sd_EM_i, color="#555555")
+        #plt.gca().fill_between(t.flat, mu_TA_i - 2 * sd_TA_i, mu_TA_i + 2 * sd_TA_i, color="#FFFaaa")
+        plt.gca().fill_between(t.flat, mu_ME_i - 2 * sd_ME_i, mu_ME_i + 2 * sd_ME_i, color="#bbbbbb")
 
         #plt.errorbar(t, mu_EM_i, yerr=2 * sd_EM_i)
         #plt.errorbar(t, mu_TA_i, yerr=2 * sd_TA_i)
@@ -220,27 +219,26 @@ if __name__ == "__main__":
    # X, Y = standardize(X, Y, [0, 0, 0, 0,0,0], [80, 80, 80, 80,100,100])
 
     lbx = np.array([.0, .0, .0,  .0, .0,  .0])
-    ubx = np.array([80., 80., 80., 80., 100., 100.])
+    ubx = np.array([40., 40., 40., 40., 100., 100.])
     lby = np.array([0., 0., 0., 0.])
-    uby = np.array([80., 80., 80., 80.])
-    #meanX = np.mean(X, 0)
-    #stdX = np.std(X, 0)
-    #X = scale_gaussian(X, meanX, stdX)
+    uby = np.array([40., 40., 40., 40.])
+    meanX = np.mean(X, 0)
+    stdX = np.std(X, 0)
+    X = scale_gaussian(X, meanX, stdX)
     #X = scale_min_max(X, lbx, ubx)
-    #meanY = np.mean(Y, 0)
-    #stdY = np.std(Y, 0)
-    #Y = scale_gaussian(Y, meanY, stdY)
+    meanY = np.mean(Y, 0)
+    stdY = np.std(Y, 0)
+    Y = scale_gaussian(Y, meanY, stdY)
     #Y = scale_min_max(Y, lby, uby)
 
-    D = 4
     if optimize:
         hyper = np.zeros((E, D + h))
 
         for i in range(E):
             #hyper[i, :] = train_gp(X, Y[:, i], i)
-            hyper[i, :] = train_gp(X1, Y[:, i], i, meanFunc='zero')
+            hyper[i, :] = train_gp(X, Y[:, i], i, meanFunc='zero')
     
-            K = calc_cov_matrix(X1, hyper[i, :D], hyper[i, D]**2)
+            K = calc_cov_matrix(X, hyper[i, :D], hyper[i, D]**2)
             K = K + hyper[i, D + 1]**2 * np.eye(n)  # Add noise variance to diagonal
             K = (K + K.T) * 0.5   # Make sure matrix is symmentric
             try:
@@ -260,12 +258,12 @@ if __name__ == "__main__":
             invK[i, :, :] = np.loadtxt(dir_parameters + 'invK' + str(i + 1), delimiter=',')
             #hyper[i, -1] = 0  # np.mean(Y[:, i])
 
-    u = np.array([50., 50.])
-    x0 = np.array([10., 20., 30., 40.])
+    u = np.array([90., 10.])
+    x0 = np.array([10., 90., 30., 40.])
     z = np.concatenate([x0, u])
     #z = scaler.transform(z.reshape(1, -1))
-    #z = scale_gaussian(z, meanX, stdX)
+    z = scale_gaussian(z, meanX, stdX)
     #z = scale_min_max(z, lbx, ubx)
-    #mu, var = predict_casadi(X1, Y, invK, hyper, z[:4], z[4:])
-    mu, var  = predict_casadi(X1, Y, invK, hyper, x0, u)
+    mu, var = predict_casadi(X, Y, invK, hyper, z[:4], z[4:])
+    #mu, var  = predict_casadi(X, Y, invK, hyper, x0, u)
     #mu2, var2  = predict(X, Y, invK, hyper, x0, u)

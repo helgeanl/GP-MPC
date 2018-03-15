@@ -26,12 +26,12 @@ simTime = 300                           # Simulation time in seconds
 
 
 # Regression data
-npoints = 30                           # Number of data points generated
+npoints = 40                           # Number of data points generated
 u_min = np.array([0., 0.])              # lower bound of control inputs
 u_max = np.array([100., 100.])          # upper bound of control inputs
 x_min = np.array([0., 0., 0., 0.])      # lower bound of expected minimum state
-x_max = np.array([80., 80., 80., 80])   # upper bound of expected minimum state
-R = np.diag([1e-3, 1e-3, 1e-3, 1e-3])   # noise covariance matrix
+x_max = np.array([40., 40., 40., 40])   # upper bound of expected minimum state
+R = np.diag([1e-5, 1e-5, 1e-5, 1e-5])   # noise covariance matrix
 
 
 def integrate_system(ndstate, nastate, u, t0, tf, x0):
