@@ -9,7 +9,7 @@ from __future__ import division
 from __future__ import print_function
 
 from sys import path
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py27-v3.3.0")
+path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
 path.append(r"./GP_MPC/")
 
 #import time
@@ -81,8 +81,8 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
     npoints = X.shape[0]
     num_states = len(invK)
     num_inputs = X.shape[1]
-    print(num_inputs)
-    initVar = 0.001
+
+    initVar = 0.005 * np.std(Y)
     simTime = 300
     deltat = 30
     simPoints = int(simTime / deltat)
@@ -147,8 +147,8 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
 
     t = np.linspace(0.0, simTime, simPoints)
     u_matrix = np.zeros((simPoints, 2))
-    u = np.array([90., 10.])
-    x0 = np.array([10., 90., 30., 40.])
+    u = np.array([50., 50.])
+    x0 = np.array([10., 20., 30., 40.])
     u_matrix[:, 0] = u[0]
     u_matrix[:, 1] = u[1]
     Y_sim = sim_system(x0, u_matrix, simTime, deltat)
@@ -174,7 +174,7 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
         sd_ME_i = np.sqrt(var_ME[:, i])
 
         plt.gca().fill_between(t.flat, mu_EM_i - 2 * sd_EM_i, mu_EM_i + 2 * sd_EM_i, color="#555555")
-        #plt.gca().fill_between(t.flat, mu_TA_i - 2 * sd_TA_i, mu_TA_i + 2 * sd_TA_i, color="#FFFaaa")
+        plt.gca().fill_between(t.flat, mu_TA_i - 2 * sd_TA_i, mu_TA_i + 2 * sd_TA_i, color="#FFFaaa")
         plt.gca().fill_between(t.flat, mu_ME_i - 2 * sd_ME_i, mu_ME_i + 2 * sd_ME_i, color="#bbbbbb")
 
         #plt.errorbar(t, mu_EM_i, yerr=2 * sd_EM_i)
@@ -232,12 +232,8 @@ if __name__ == "__main__":
     #Y = scale_min_max(Y, lby, uby)
 
     if optimize:
-        hyper = np.zeros((E, D + h))
-
+        hyper = train_gp(X, Y, meanFunc='zero')
         for i in range(E):
-            #hyper[i, :] = train_gp(X, Y[:, i], i)
-            hyper[i, :] = train_gp(X, Y[:, i], i, meanFunc='zero')
-    
             K = calc_cov_matrix(X, hyper[i, :D], hyper[i, D]**2)
             K = K + hyper[i, D + 1]**2 * np.eye(n)  # Add noise variance to diagonal
             K = (K + K.T) * 0.5   # Make sure matrix is symmentric
@@ -258,8 +254,8 @@ if __name__ == "__main__":
             invK[i, :, :] = np.loadtxt(dir_parameters + 'invK' + str(i + 1), delimiter=',')
             #hyper[i, -1] = 0  # np.mean(Y[:, i])
 
-    u = np.array([90., 10.])
-    x0 = np.array([10., 90., 30., 40.])
+    u = np.array([50., 50.])
+    x0 = np.array([10., 20., 30., 40.])
     z = np.concatenate([x0, u])
     #z = scaler.transform(z.reshape(1, -1))
     z = scale_gaussian(z, meanX, stdX)

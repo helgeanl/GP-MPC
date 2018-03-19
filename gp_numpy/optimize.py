@@ -38,7 +38,6 @@ def calc_cov_matrix(X, ell, sf2):
         
         dist = (np.sum(x**2, 1).reshape(-1, 1) + np.sum(x**2, 1) -
                 2 * np.dot(x, x.T)) / ell[i]**2 + dist
-    print(np.dot(x, x.T).shape)
     return sf2 * np.exp(-.5 * dist)
 
 
@@ -59,14 +58,13 @@ def calc_NLL(hyper, X, Y):
     #m   = hyper[D + 2]
     #K   = np.zeros((n, n))
     K = calc_cov_matrix(X, ell, sf2)
-    print(K.shape)
+
     K = K + lik * np.eye(n)
     K = (K + K.T) * 0.5   # Make sure matrix is symmentric
     try:
         L = np.linalg.cholesky(K)
     except np.linalg.LinAlgError:
         print("K is not positive definit, adding jitter!")
-        print(L)
         K = K + np.eye(3) * 1e-8
         L = np.linalg.cholesky(K)
 
