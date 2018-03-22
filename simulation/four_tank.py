@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 ndstate = 4                             # Number of states
 nastate = 0                             # Number of algebraic equations
 ninput  = 2                             # Number of inputs
-deltat  = 30                             # Time of one control interval 3s
+dt      = 30                             # Time of one control interval 3s
 
 training = True                         # True: generate training data
 optimize = False                        # Optimize hyperperameters
@@ -27,16 +27,16 @@ simTime = 300                           # Simulation time in seconds
 
 # Regression data
 npoints = 30                           # Number of data points generated
-u_min = np.array([0., 0.])              # lower bound of control inputs
-u_max = np.array([100., 100.])          # upper bound of control inputs
-x_min = np.array([0., 0., 0., 0.])      # lower bound of expected minimum state
-x_max = np.array([40., 40., 40., 40])   # upper bound of expected minimum state
-R = np.diag([1e-5, 1e-5, 1e-5, 1e-5])   # noise covariance matrix
+u_min = np.array([0., 0.])             # lower bound of control inputs [ml/s]
+u_max = np.array([60., 60.])           # upper bound of control inputs [ml/s]
+x_min = np.array([0., 0., 0., 0.])     # lower bound of expected minimum state [cm]
+x_max = np.array([30., 30., 30., 30])  # upper bound of expected minimum state [cm]
+R = np.diag([1e-5, 1e-5, 1e-5, 1e-5])  # noise covariance matrix
 
 
 def integrate_system(ndstate, nastate, u, t0, tf, x0):
 
-    # Model Parameters
+    # Model Parameters (Raff, Tobias et al., 2006)
     g = 981
     a1 = 0.233
     a2 = 0.242
@@ -132,8 +132,8 @@ def generate_training_data():
         X_mat[k, :] = X_mat[k, :] * (x_max - x_min) + x_min
 
     for un in range(npoints):
-        t0i = 0.                 # start time of integrator
-        tfi = deltat             # end time of integrator
+        t0i = 0.              # start time of integrator
+        tfi = dt              # end time of integrator
         u_s = u_mat[un, :]    # control input for simulation
         x_s = X_mat[un, :]    # state input for simulation
 
@@ -158,14 +158,14 @@ def main():
 
     if sim is True:
         # Plot simulation
-        simPoints = simTime / deltat
+        simPoints = simTime / dt
         u_matrix = np.zeros((simPoints, 2))
         u_matrix[:, 0] = 50
         u_matrix[:, 1] = 50
         x0 = np.array([10, 20, 30, 40])
 
         t = np.linspace(0.0, 300.0, 100)
-        Y_sim = sim_system(x0, u_matrix, simTime, deltat)
+        Y_sim = sim_system(x0, u_matrix, simTime, dt)
         plt.figure()
         plt.clf()
         for i in range(4):

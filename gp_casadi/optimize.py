@@ -20,42 +20,68 @@ from scipy.spatial import distance
 # -----------------------------------------------------------------------------
 # Optimization of hyperperameters as a constrained minimization problem
 # -----------------------------------------------------------------------------
-def calc_NLL(hyper, Y, squaredist):
+def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
     """ Objective function
 
     Calculate the negative log likelihood function using Casadi SX symbols.
 
     # Arguments:
-        hyper: Array with hyperparameters [ell_1 .. ell_D sf sn], where D is the
+        hyper: Array with hyperparameters [ell_1 .. ell_Nx sf sn], where Nx is the
             number of inputs to the GP.
-        X: Training data matrix with inputs of size NxD.
-        Y: Training data matrix with outpyts of size NxE, with E number of outputs.
+        X: Training data matrix with inputs of size (N x Nx).
+        Y: Training data matrix with outpyts of size (N x Ny), with Ny number of outputs.
 
     # Returns:
         NLL: The negative log likelihood function (scalar)
     """
 
-    n = ca.MX.size(Y)[0]
-    D = ca.MX.size(hyper)[1] - 2
-    ell = hyper[:D]
-    sf2 = hyper[D]**2
-    sn2 = hyper[D + 1]**2
+    N, Nx = ca.MX.size(X)
+    ell = hyper[:Nx]
+    sf2 = hyper[Nx]**2
+    sn2 = hyper[Nx + 1]**2
+    
+    if meanFunc == 'zero':
+        dY = Y
+    elif meanFunc == 'const':
+        dY = Y - hyper[-1]
+    elif meanFunc == 'linear':
+        print('Linear mean function')
+        a_s = ca.SX.sym('a', Nx)
+        b_s = ca.SX.sym('b')
+        X_s = ca.SX.sym('X', N, Nx)
+        mean = ca.Function('mean', [X_s, a_s, b_s], 
+                          [ca.sum2(ca.transpose(a_s * X_s.T)) + b_s])
+        a = hyper[-Nx-1:-1]
+        b = hyper[-1]
+        dY = Y - mean(X, a, b)
+    elif meanFunc == 'polynomial':
+        a_s = ca.SX.sym('a', Nx)
+        b_s = ca.SX.sym('b', Nx)
+        c_s = ca.SX.sym('b')
+        X_s = ca.SX.sym('X', N, Nx)
+        mean = ca.Function('mean', [X_s, a_s, b_s, c_s], 
+                          [ca.sum2(ca.transpose(a_s * X_s.T**2))] + ca.sum2(ca.transpose(b_s * X_s.T)) + c_s)
+        a = hyper[-2*Nx-1:-Nx-1]
+        b = hyper[-Nx-1:-1]
+        c = hyper[-1]
+        dY = Y - mean(X, a, b, c)
 
+    
     # Calculate covariance matrix
-    K_s = ca.SX.sym('K_s', n, n)
-    sqdist = ca.SX.sym('sqd', n, n)
+    K_s = ca.SX.sym('K_s',N, N)
+    sqdist = ca.SX.sym('sqd', N, N)
     elli = ca.SX.sym('elli')
     ki = ca.Function('ki', [sqdist, elli, K_s], [sqdist / elli**2 + K_s])
-    K1 = ca.MX(n, n)
-    for i in range(D):
-        K1 = ki(squaredist[:, (i  * n):(i + 1) * n], ell[i], K1)
+    K1 = ca.MX(N, N)
+    for i in range(Nx):
+        K1 = ki(squaredist[:, (i  * N):(i + 1) * N], ell[i], K1)
 
     sf2_s   = ca.SX.sym('sf2')
-    exponent   = ca.SX.sym('exp', n, n)
+    exponent   = ca.SX.sym('exp', N, N)
     K_exp = ca.Function('K', [exponent, sf2_s], [sf2_s * ca.SX.exp(-.5 * exponent)])
     K2 = K_exp(K1, sf2)
 
-    K = K2 + sn2 * ca.MX.eye(n)
+    K = K2 + sn2 * ca.MX.eye(N)
     K = (K + K.T) * 0.5   # Make sure matrix is symmentric
 
     A = ca.SX.sym('A', ca.MX.size(K))
@@ -67,9 +93,9 @@ def calc_NLL(hyper, Y, squaredist):
     log_detK = log_determinant(L)
 
     Y_s = ca.SX.sym('Y', ca.MX.size(Y))
-    L_s = ca.SX.sym('L', ca.Sparsity.lower(n))
+    L_s = ca.SX.sym('L', ca.Sparsity.lower(N))
     sol = ca.Function('sol', [L_s, Y_s], [ca.solve(L_s, Y_s)])
-    invLy = sol(L, Y)
+    invLy = sol(L, dY)
 
     invLy_s = ca.SX.sym('invLy', ca.MX.size(invLy))
     sol2 = ca.Function('sol2', [L_s, invLy_s], [ca.solve(L_s.T, invLy_s)])
@@ -78,7 +104,7 @@ def calc_NLL(hyper, Y, squaredist):
     alph = ca.SX.sym('alph', ca.MX.size(alpha))
     det = ca.SX.sym('det')
     NLL = ca.Function('NLL', [Y_s, alph, det], [0.5 * ca.mtimes(Y_s.T, alph) + 0.5 * det])
-    return NLL(Y, alpha, log_detK)
+    return NLL(dY, alpha, log_detK)
 
 
 def train_gp(X, Y, meanFunc='zero'):
@@ -88,36 +114,48 @@ def train_gp(X, Y, meanFunc='zero'):
     the Gaussian Process.
 
     # Arguments:
-        X: Training data matrix with inputs of size NxD, where D is the number
+        X: Training data matrix with inputs of size (N x Nx), where Nx is the number
             of inputs to the GP.
-        Y: Training data matrix with outpyts of size NxE, with E number of outputs.
-        state: The index of the wanted state (#### REMOVE ####)
+        Y: Training data matrix with outpyts of size (N x Ny), with Ny number of outputs.
         meanFunc: String with the name of the wanted mean function.
-            Possible options: 'zero', 'const', 'linear', 'polynomial'
-
+            Possible options: 
+                'zero':       m = 0 
+                'const':      m = a
+                'linear':     m(x) = aT*x + b
+                'polynomial': m(x) = xT*diag(a)*x + bT*x + c
+            
     # Return:
-        hyp_pot: Array with the optimal hyperparameters [ell_1 .. ell_D sf sn].
+        hyp_pot: Array with the optimal hyperparameters [ell_1 .. ell_Nx sf sn].
     """
 
 
-    n, D = X.shape
-    num_outputs = Y.shape[1]
-
+    N, Nx = X.shape
+    Ny = Y.shape[1]
 
     if meanFunc == 'zero':
-        h = 2
-    else:
-        h = 3
+        h_m = 0
+    elif meanFunc == 'const':
+        h_m = 1
+    elif meanFunc == 'linear':
+        h_m = Nx + 1
+    elif meanFunc == 'polynomial':
+        h_m = 2 * Nx + 1
     
+    h_ell   = Nx # Number of length scales parameters
+    h_sf    = 1 # Standard deviation function
+    h_sn    = 1 # Standard deviation noise
+    num_hyp = h_ell + h_sf + h_sn + h_m
+
     # Create solver
-    Y_s          = ca.MX.sym('Y', n)
-    hyp_s        = ca.MX.sym('hyp', 1, D + h)
-    squaredist_s = ca.MX.sym('sqdist', n, n * D)
+    Y_s          = ca.MX.sym('Y', N)
+    X_s          = ca.MX.sym('X', N, Nx)
+    hyp_s        = ca.MX.sym('hyp', 1, num_hyp)
+    squaredist_s = ca.MX.sym('sqdist', N, N * Nx)
     param_s = ca.horzcat(squaredist_s, Y_s)
 
-    NLL_func = ca.Function('NLL', [hyp_s, Y_s, squaredist_s],
-                           [calc_NLL(hyp_s, Y_s, squaredist_s)])
-    nlp = {'x': hyp_s, 'f': NLL_func(hyp_s, Y_s, squaredist_s), 'p': param_s}
+    NLL_func = ca.Function('NLL', [hyp_s, X_s, Y_s, squaredist_s],
+                           [calc_NLL(hyp_s, X_s, Y_s, squaredist_s)])
+    nlp = {'x': hyp_s, 'f': NLL_func(hyp_s, X, Y_s, squaredist_s), 'p': param_s}
     
     # NLP solver options
     opts = {}
@@ -126,54 +164,56 @@ def train_gp(X, Y, meanFunc='zero'):
     opts["verbose"]             = False
     opts["ipopt.print_level"]   = 0
     #opts["ipopt.tol"]           = 1e-12
-    #opts["ipopt.linear_solver"] = "ma27"
+    opts["ipopt.linear_solver"] = "ma27"
     #opts["ipopt.hessian_approximation"] = "limited-memory"
     Solver = ca.nlpsol('Solver', 'ipopt', nlp, opts)
 
-    hyp_opt = np.zeros((num_outputs, D + h))
-    for output in range(num_outputs):
+    hyp_opt = np.zeros((Ny, num_hyp))
+    for output in range(Ny):
         print('Optimizing hyperparameters for state ' + str(output))
         stdX      = np.std(X)
         stdF      = np.std(Y[:, output])
         meanF     = np.mean(Y)
-        lb        = np.zeros(D + h)
-        ub        = np.zeros(D + h)
-        lb[:D]    = stdX / 20
-        ub[:D]    = stdX * 20
-        lb[D]     = stdF / 20
-        ub[D]     = stdF * 20
-        lb[D + 1] = 10**-5 / 10
-        ub[D + 1] = 10**-5 * 10
+        lb        = np.zeros(num_hyp)
+        ub        = np.zeros(num_hyp)
+        lb[:Nx]    = stdX / 20
+        ub[:Nx]    = stdX * 20
+        lb[Nx]     = stdF / 20
+        ub[Nx]     = stdF * 20
+        lb[Nx + 1] = 10**-5 / 10
+        ub[Nx + 1] = 10**-5 * 10
     
         if meanFunc == 'const':
-            lb[D + 2] = meanF / 5
-            ub[D + 2] = meanF * 5
+            lb[-1] = meanF / 5
+            ub[-1] = meanF * 5
+        elif meanFunc != 'zero':
+            lb[-1] = meanF / 5
+            ub[-1] = meanF * 5
+            lb[-h_m:-1] = 0
+            ub[-h_m:-1] = 2
+
     
         multistart = 1
     
-        squaredist = np.zeros((n, n * D))
-        for i in range(D):
-            d = distance.pdist(X[:, i].reshape(n, 1), 'sqeuclidean')
-            squaredist[:, (i * n):(i + 1) * n] = distance.squareform(d)
+        squaredist = np.zeros((N, N * Nx))
+        for i in range(Nx):
+            d = distance.pdist(X[:, i].reshape(N, 1), 'sqeuclidean')
+            squaredist[:, (i * N):(i + 1) * N] = distance.squareform(d)
         param = ca.horzcat(squaredist, Y[:, output])
         
         obj = np.zeros((multistart, 1))
-        hyp_opt_loc = np.zeros((multistart, D + h))
+        hyp_opt_loc = np.zeros((multistart, num_hyp))
         
-        hyper_init = pyDOE.lhs(D + h, samples=multistart)
+        hyper_init = pyDOE.lhs(num_hyp, samples=multistart)
     
         for i in range(multistart):
             hyper_init[i, :] = hyper_init[i, :] * (ub - lb) + lb
-            hyper_init[i, D + 1] = 10**-5        # Noise
     
-            if meanFunc == 'const':
-                hyper_init[i, D + 2] = meanF
-    
-            res = res = Solver(x0=hyper_init[0, :], lbx=lb, ubx=ub, p=param)
+            res = res = Solver(x0=hyper_init[i, :], lbx=lb, ubx=ub, p=param)
             obj[i] = res['f']
             hyp_opt_loc[i, :] = res['x']
     
-        hyp_opt[output, :D + h] = hyp_opt_loc[np.argmin(obj)]
+        hyp_opt[output, :] = hyp_opt_loc[np.argmin(obj)]
 
 
     return hyp_opt
