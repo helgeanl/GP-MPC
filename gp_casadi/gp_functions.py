@@ -105,7 +105,7 @@ def gp(invK, X, Y, hyp, z,  meanFunc='zero'):
     return mean, var
 
 
-def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar):
+def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar, diag=False):
     """ Gaussian Process with Taylor Approximation
 
     This uses a first order taylor for the mean evaluation (a normal GP mean),
@@ -132,6 +132,7 @@ def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar):
     var = ca.MX.zeros(Nx, 1)
     v     = X - ca.repmat(inputmean, N, 1)
     covar = ca.MX.zeros(Ny, Ny)
+    variance = ca.MX.zeros(Ny)
     covariance = ca.MX.zeros(Ny, Ny)
     d_mean = ca.MX.zeros(Ny, 1)
     dd_var = ca.MX.zeros(Ny, Ny)
@@ -172,9 +173,15 @@ def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar):
     
         covar1 = ca.mtimes(d_mean, d_mean.T)
         covar[0, 0] = inputvar[a]
-        covariance[a, a] = var[a] + ca.trace(ca.mtimes(covar, .5 * dd_var + covar1))
-
-    return [mean, covariance]
+        if diag:
+            variance[a] = var[a] + ca.trace(ca.mtimes(covar, .5 * dd_var + covar1))
+        else:
+            covariance[a, a] = var[a] + ca.trace(ca.mtimes(covar, .5 * dd_var + covar1))
+    
+    if diag:
+        return [mean, variance]
+    else:
+        return [mean, covariance]
 
 
 def gp_exact_moment(invK, X, Y, hyper, inputmean, inputcov):
