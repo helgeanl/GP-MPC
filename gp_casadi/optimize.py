@@ -11,6 +11,7 @@ from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\Software\coinhsl-win32-openblas-2014")
 
+import time
 import pyDOE
 import numpy as np
 import casadi as ca
@@ -60,13 +61,13 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
         c_s = ca.SX.sym('b')
         X_s = ca.SX.sym('X', N, Nx)
         mean = ca.Function('mean', [X_s, a_s, b_s, c_s], 
-                          [ca.sum2(ca.transpose(a_s * X_s.T**2))] + ca.sum2(ca.transpose(b_s * X_s.T)) + c_s)
+                          [ca.sum2(ca.transpose(a_s * X_s.T**2)) +
+                          ca.sum2(ca.transpose(b_s * X_s.T)) + c_s])
         a = hyper[-2*Nx-1:-Nx-1]
         b = hyper[-Nx-1:-1]
         c = hyper[-1]
         dY = Y - mean(X, a, b, c)
 
-    
     # Calculate covariance matrix
     K_s = ca.SX.sym('K_s',N, N)
     sqdist = ca.SX.sym('sqd', N, N)
@@ -107,7 +108,7 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
     return NLL(dY, alpha, log_detK)
 
 
-def train_gp(X, Y, meanFunc='zero'):
+def train_gp(X, Y, meanFunc='zero', hyper_init=None, multistart=1):
     """ Train hyperparameters
 
     Maximum likelihood estimation is used to optimize the hyperparameters of
@@ -128,10 +129,9 @@ def train_gp(X, Y, meanFunc='zero'):
         hyp_pot: Array with the optimal hyperparameters [ell_1 .. ell_Nx sf sn].
     """
 
-
     N, Nx = X.shape
     Ny = Y.shape[1]
-
+    # Counting mean function parameters
     if meanFunc == 'zero':
         h_m = 0
     elif meanFunc == 'const':
@@ -141,9 +141,9 @@ def train_gp(X, Y, meanFunc='zero'):
     elif meanFunc == 'polynomial':
         h_m = 2 * Nx + 1
     
-    h_ell   = Nx # Number of length scales parameters
-    h_sf    = 1 # Standard deviation function
-    h_sn    = 1 # Standard deviation noise
+    h_ell   = Nx    # Number of length scales parameters
+    h_sf    = 1     # Standard deviation function
+    h_sn    = 1     # Standard deviation noise
     num_hyp = h_ell + h_sf + h_sn + h_m
 
     # Create solver
@@ -151,7 +151,7 @@ def train_gp(X, Y, meanFunc='zero'):
     X_s          = ca.MX.sym('X', N, Nx)
     hyp_s        = ca.MX.sym('hyp', 1, num_hyp)
     squaredist_s = ca.MX.sym('sqdist', N, N * Nx)
-    param_s = ca.horzcat(squaredist_s, Y_s)
+    param_s      = ca.horzcat(squaredist_s, Y_s)
 
     NLL_func = ca.Function('NLL', [hyp_s, X_s, Y_s, squaredist_s],
                            [calc_NLL(hyp_s, X_s, Y_s, squaredist_s)])
@@ -159,18 +159,20 @@ def train_gp(X, Y, meanFunc='zero'):
     
     # NLP solver options
     opts = {}
-    opts["expand"]              = True
-    #opts["ipopt.max_iter"]      = 100
-    opts["verbose"]             = False
-    opts["ipopt.print_level"]   = 0
-    #opts["ipopt.tol"]           = 1e-12
-    opts["ipopt.linear_solver"] = "ma27"
+    opts['expand']              = True
+    opts['print_time']          = False
+    opts['verbose']             = False
+    opts['ipopt.print_level']   = 0
+    opts['ipopt.linear_solver'] = 'ma27'
+    #opts["ipopt.max_iter"]     = 100
+    #opts["ipopt.tol"]          = 1e-12
     #opts["ipopt.hessian_approximation"] = "limited-memory"
     Solver = ca.nlpsol('Solver', 'ipopt', nlp, opts)
 
     hyp_opt = np.zeros((Ny, num_hyp))
+    print('\n----------------------------------------')
     for output in range(Ny):
-        print('Optimizing hyperparameters for state ' + str(output))
+        print('Optimizing hyperparameters for state %d:' % output)
         stdX      = np.std(X)
         stdF      = np.std(Y[:, output])
         meanF     = np.mean(Y)
@@ -182,7 +184,7 @@ def train_gp(X, Y, meanFunc='zero'):
         ub[Nx]     = stdF * 20
         lb[Nx + 1] = 10**-5 / 10
         ub[Nx + 1] = 10**-5 * 10
-    
+
         if meanFunc == 'const':
             lb[-1] = meanF / 5
             ub[-1] = meanF * 5
@@ -192,28 +194,31 @@ def train_gp(X, Y, meanFunc='zero'):
             lb[-h_m:-1] = 0
             ub[-h_m:-1] = 2
 
-    
-        multistart = 1
-    
+        if hyper_init is None:
+            hyp_init = pyDOE.lhs(num_hyp, samples=multistart)
+            hyp_init = hyp_init * (ub - lb) + lb
+        else:
+            hyp_init = hyper_init[output]
+
         squaredist = np.zeros((N, N * Nx))
         for i in range(Nx):
             d = distance.pdist(X[:, i].reshape(N, 1), 'sqeuclidean')
             squaredist[:, (i * N):(i + 1) * N] = distance.squareform(d)
         param = ca.horzcat(squaredist, Y[:, output])
-        
+
         obj = np.zeros((multistart, 1))
         hyp_opt_loc = np.zeros((multistart, num_hyp))
-        
-        hyper_init = pyDOE.lhs(num_hyp, samples=multistart)
     
         for i in range(multistart):
-            hyper_init[i, :] = hyper_init[i, :] * (ub - lb) + lb
-    
-            res = res = Solver(x0=hyper_init[i, :], lbx=lb, ubx=ub, p=param)
+            solve_time = -time.time()
+            res = res = Solver(x0=hyp_init[i, :], lbx=lb, ubx=ub, p=param)
+            status = Solver.stats()['return_status']
             obj[i] = res['f']
             hyp_opt_loc[i, :] = res['x']
-    
-        hyp_opt[output, :] = hyp_opt_loc[np.argmin(obj)]
+            solve_time += time.time()
+            print("\t%d: %s - %f s" % (i, status, solve_time))
 
+        hyp_opt[output, :] = hyp_opt_loc[np.argmin(obj)]
+    print('----------------------------------------')
 
     return hyp_opt

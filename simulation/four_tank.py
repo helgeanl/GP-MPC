@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 ndstate = 4                             # Number of states
 nastate = 0                             # Number of algebraic equations
 ninput  = 2                             # Number of inputs
-dt      = 30                             # Time of one control interval 3s
+dt      = 30                            # Time of one control interval 3s
 
 training = True                         # True: generate training data
 optimize = False                        # Optimize hyperperameters
@@ -26,12 +26,12 @@ simTime = 300                           # Simulation time in seconds
 
 
 # Regression data
-npoints = 30                           # Number of data points generated
+npoints = 20                           # Number of data points generated
 u_min = np.array([0., 0.])             # lower bound of control inputs [ml/s]
 u_max = np.array([60., 60.])           # upper bound of control inputs [ml/s]
 x_min = np.array([0., 0., 0., 0.])     # lower bound of expected minimum state [cm]
 x_max = np.array([30., 30., 30., 30])  # upper bound of expected minimum state [cm]
-R = np.diag([1e-5, 1e-5, 1e-5, 1e-5])  # noise covariance matrix
+R = np.diag([1e-3, 1e-3, 1e-3, 1e-3])  # noise covariance matrix
 
 
 def integrate_system(ndstate, nastate, u, t0, tf, x0):

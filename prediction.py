@@ -17,10 +17,10 @@ import numpy as np
 import casadi as ca
 import casadi.tools as ctools
 import matplotlib.pyplot as plt
+from matplotlib.font_manager import FontProperties
 from simulation.four_tank import sim_system
 from gp_casadi.gp_functions import gp, gp_exact_moment, gp_taylor_approx
 from gp_casadi.optimize import train_gp
-from gp_casadi.mpc_simple import mpc_simple
 from gp_casadi.mpc import mpc
 from gp_numpy.gp_functions import calc_cov_matrix
 
@@ -87,7 +87,7 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
 
     initVar = 0.005 * np.std(Y)
     dt = 30
-    simTime = 10 * dt
+    simTime = 150.0
     Nt = int(simTime / dt)
 
     mu_EM = np.zeros((Nt, Ny))
@@ -160,7 +160,8 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
 
     #var_EM = scale_gaussian_inverse(var_EM, 0, 1)
     plt.figure()
-    plt.clf()
+    fontP = FontProperties()
+    fontP.set_size('small')
     for i in range(Ny):
         plt.subplot(2, 2, i + 1)
         mu_EM_i = mu_EM[:, i]
@@ -171,33 +172,34 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
         sd_TA_i = np.sqrt(var_TA[:, i])
         sd_ME_i = np.sqrt(var_ME[:, i])
 
-        plt.gca().fill_between(t.flat, mu_EM_i - 2 * sd_EM_i, mu_EM_i + 2 * sd_EM_i, color="#555555")
-        plt.gca().fill_between(t.flat, mu_TA_i - 2 * sd_TA_i, mu_TA_i + 2 * sd_TA_i, color="#FFFaaa")
-        plt.gca().fill_between(t.flat, mu_ME_i - 2 * sd_ME_i, mu_ME_i + 2 * sd_ME_i, color="#bbbbbb")
+        plt.gca().fill_between(t.flat, mu_EM_i - 2 * sd_EM_i, mu_EM_i + 
+               2 * sd_EM_i, color="#555555", label='95% conf interval EM')
+        plt.gca().fill_between(t.flat, mu_TA_i - 2 * sd_TA_i, mu_TA_i + 
+               2 * sd_TA_i, color="#FFFaaa", label='95% conf interval TA')
+        plt.gca().fill_between(t.flat, mu_ME_i - 2 * sd_ME_i, mu_ME_i + 
+               2 * sd_ME_i, color="#bbbbbb", label='95% conf interval ME')
 
-        #plt.errorbar(t, mu_EM_i, yerr=2 * sd_EM_i)
-        #plt.errorbar(t, mu_TA_i, yerr=2 * sd_TA_i)
-        #plt.errorbar(t, mu_EM_i, yerr=2 * sd_ME_i)
+        #plt.errorbar(t, mu_EM_i, yerr=2 * sd_EM_i, label='95% conf interval EM')
+        #plt.errorbar(t, mu_TA_i, yerr=2 * sd_TA_i, label='95% conf interval TA')
+        #plt.errorbar(t, mu_EM_i, yerr=2 * sd_ME_i, label='95% conf interval ME')
 
-        plt.plot(t, Y_sim[:, i], 'b-')
-        plt.plot(t, mu_EM_i, 'rx')
-        plt.plot(t, mu_TA_i, 'kx')
-        plt.plot(t, mu_ME_i, 'yx')
+        plt.plot(t, Y_sim[:, i], 'b-', label='Simulation')
+        plt.plot(t, mu_EM_i, 'rx', label='GP Excact moment')
+        plt.plot(t, mu_TA_i, 'kx', label='GP Taylor Approx')
+        plt.plot(t, mu_ME_i, 'yx', label='GP Mean Equivalence')
 
-        labels = ['Simulation', 'GP Excact moment', 'GP Mean Equivalence', 'GP Taylor Approx',
-                  '95% conf interval EM', '95% conf interval TA', '95% conf interval ME']
         plt.ylabel('Level in tank ' + str(i + 1) + ' [cm]')
-        plt.legend(labels)
+        plt.legend(prop=fontP)
         plt.suptitle('Simulation and prediction', fontsize=16)
         plt.xlabel('Time [s]')
         #plt.ylim([0, 40])
     plt.show()
     
     plt.figure()
-    plt.clf()
+    u_temp = np.vstack((u, u[-1, :]))
     for i in range(Nu):
         plt.subplot(2, 1, i + 1)
-        plt.step(t, u[:, i], 'k')
+        plt.step(t, u_temp[:, i], 'k', where='post')
         plt.ylabel('Flow  ' + str(i + 1) + ' [ml/s]')
         plt.suptitle('Control inputs', fontsize=16)
         plt.xlabel('Time [s]')
@@ -209,7 +211,7 @@ if __name__ == "__main__":
     X = np.loadtxt(dir_data + 'X_matrix_tank')
 
     Y = np.loadtxt(dir_data + 'Y_matrix_tank')
-    optimize = False
+    optimize = True
     N, Nx = X.shape  # Number of sampling points and inputs
     Ny = Y.shape[1]  # Number of outputs
 
@@ -277,7 +279,8 @@ if __name__ == "__main__":
     #z = scale_gaussian(z, meanX, stdX)
     #z = scale_min_max(z, lbx, ubx)
     #mu, var = predict_casadi(X, Y, invK, hyper, z[:4], z[4:])
-    mean, u_mpc = mpc(X, Y, invK, hyper)
+    mean, u_mpc = mpc(X, Y, invK, hyper, method='TA')
+    mean, u_mpc = mpc(X, Y, invK, hyper, method='ME')
     #mu, var  = predict_casadi(X, Y, invK, hyper, x0, u_mpc)
     #mu2, var2  = predict(X, Y, invK, hyper, x0, u)
     
