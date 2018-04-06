@@ -19,7 +19,7 @@ from simulation.four_tank import sim_system
 from . gp_functions import gp_taylor_approx, gp
 
 
-def cost_lf(x, x_ref, covar_x, P, s=1):
+def cost_lf(x, x_ref, covar_x, P, s=2):
     # Cost function
     P_s = ca.SX.sym('Q', ca.MX.size(P))
     x_s = ca.SX.sym('x', ca.MX.size(x))
@@ -56,7 +56,8 @@ def cost_l(x, x_ref, covar_x, u, Q, R, K, s=1):
                  + trace_u(R, covar_u(covar_x, K))
 
 
-def mpc(X, Y, invK, hyper, method='TA'):
+def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, 
+        ulb=None, uub=None, xlb=None, xub=None, method='TA', plot=False):
     """ Model Predictive Control
     
     # Arguments:
@@ -75,18 +76,14 @@ def mpc(X, Y, invK, hyper, method='TA'):
         u: Control inputs 
     """
     
-    horizon = 120
-    dt = 30
-
-    sim_horizon = 600.0
-    Nsim = int(sim_horizon / dt)
+    Nsim = int(sim_time / dt)
 
     Nt = int(horizon / dt)
     Ny = len(invK)
     Nx = X.shape[1]
     Nu = Nx - Ny
     
-    P = np.eye(Ny) * 100
+    P = np.eye(Ny) * 1
 #    P = np.array([[6, .0, .0, .0], 
 #                  [.0, 6, .0, .0],
 #                  [.0, .0, 6, .0],
@@ -95,21 +92,22 @@ def mpc(X, Y, invK, hyper, method='TA'):
 #                  [.0, 6, .0, .0],
 #                  [.0, .0, 6, .0],
 #                  [.0, .0, .0, 31]])
-    Q = np.eye(Ny) * 10
+    Q = np.eye(Ny) * 1
     R = np.eye(Nu) * 0.01
     #K = np.zeros((Nu, Ny)) # * .5
     K = np.array([[1.8, .0, .5, .0], 
                   [.0, 1.8, .0, .5]]) * 0.0
-    # Bounds on u
-    ulb = [0., 0.]
-    uub = [60., 60.] 
-    xlb = [0, 0, 0, 0]
-    xub = [28, 28, 28, 28]
-    terminal_constraint = 1e3
 
+    
+#    ulb = [0., 0.]
+#    uub = [60., 60.] 
+#    xlb = [0, 0, 0, 0]
+#    xub = [28, 28, 28, 28]
+    #terminal_constraint = 1e3
+    terminal_constraint = None
     # Initial state
-    mean_0 = np.array([8., 10., 8., 18.])
-    mean_ref = np.array([14., 14., 14.2, 21.3])
+    mean_0 = x0 #np.array([8., 10., 8., 18.])
+    mean_ref = x_sp #np.array([14., 14., 14.2, 21.3])
     variance_0 = np.ones(Ny) * 1e-5 * np.std(Y)
     
     mean_s = ca.MX.sym('mean', Ny)
@@ -132,8 +130,8 @@ def mpc(X, Y, invK, hyper, method='TA'):
     lf_func = ca.Function('lf', [mean_s, covar_x_s], 
                            [cost_lf(mean_s, ca.MX(mean_ref), covar_x_s,  ca.MX(P))])
     # Feedback function
-    u_func = ca.Function('u', [mean_s, v_s], [ca.mtimes(ca.MX(K), mean_s - ca.MX(mean_ref)) + v_s])
-
+    #u_func = ca.Function('u', [mean_s, v_s], [ca.mtimes(ca.MX(K), mean_s - ca.MX(mean_ref)) + v_s])
+    u_func = ca.Function('u', [mean_s, v_s], [v_s])
     # Create variables struct
     var = ctools.struct_symMX([(
             ctools.entry('mean', shape=(Ny,), repeat=Nt + 1),
@@ -147,10 +145,14 @@ def mpc(X, Y, invK, hyper, method='TA'):
     
     # Adjust the relevant constraints
     for t in range(Nt):
-        varlb['v', t, :] = ulb - np.dot(K, xub)
-        varub['v', t, :] = uub - np.dot(K, xlb)
-        varlb['mean', t, :] = xlb
-        varub['mean', t, :] = xub
+        if ulb is not None:
+            varlb['v', t, :] = ulb # - np.dot(K, xub)
+        if uub is not None:
+            varub['v', t, :] = uub #- np.dot(K, xlb)
+        if xlb is not None:
+            varlb['mean', t, :] = xlb
+        if xub is not None:
+            varub['mean', t, :] = xub
 
     # Now build up constraints and objective
     obj = ca.MX(0)
@@ -165,15 +167,18 @@ def mpc(X, Y, invK, hyper, method='TA'):
         con_var.append(var['variance', t + 1] - var_i)
 
         obj += l_func(var['mean', t], ca.diag(var['variance', t]), u_i)
-    con_mean.append(var['mean', Nt] - mean_ref)
     obj += lf_func(var['mean', Nt], ca.diag(var['variance', Nt]))
-
+    
+    if terminal_constraint is not None:
+        con_mean.append(var['mean', Nt] - mean_ref)
+        conlb = np.zeros((Ny * Nt * 2 + Ny,))
+        conub = np.zeros((Ny * Nt * 2 + Ny,))
+        conlb[Ny * t] = - terminal_constraint
+        conub[Ny * t] = terminal_constraint
+    else:
+        conlb = np.zeros((Ny * Nt * 2,))
+        conub = np.zeros((Ny * Nt * 2,))
     con = ca.vertcat(*con_mean, *con_var)
-    conlb = np.zeros((Ny * Nt * 2 + Ny,))
-    conub = np.zeros((Ny * Nt * 2 + Ny,))
-    conlb[Ny * t] = - terminal_constraint
-    conub[Ny * t] = terminal_constraint
-
     # Build solver object    
     nlp = dict(x=var, f=obj, g=con)
     opts = {}
@@ -222,58 +227,85 @@ def mpc(X, Y, invK, hyper, method='TA'):
                 mean_prediction[i, :] = np.array(optvar['mean', i, :]).flatten()
 
         # Print status
-        print("t=%d: %s - %f s" % (t * dt, status, solve_time))
+        print("* t=%d: %s - %f s" % (t * dt, status, solve_time))
         v = optvar['v', 0, :]
         u[t, :] = np.array(u_func(mean[t, :], v)).flatten()
         variance[t + 1, :] = np.array(optvar['variance', -1, :]).flatten()
-        mean[t + 1, :] = sim_system(mean[t, :], u[t, :].reshape((1, 2)), dt, dt, noise=True)
+        try:
+            mean[t + 1, :] = sim_system(mean[t, :], u[t, :].reshape((1, 2)), 
+                                dt, dt, noise=True)
+        except RuntimeError:
+            print('********************************')
+            print('* Runtime error, adding jitter *')
+            print('********************************')
+            if np.any(u < 1e-6):
+                u = u +  1e-2 # Add jitter
+            if np.any(mean < 1-1e6):
+                mean = mean +  1e-3
+            print(mean)
+            print(u)
+            mean[t + 1, :] = sim_system(mean[t, :], u[t, :].reshape((1, 2)), 
+                                dt, dt, noise=True)
 
-    plt.figure()
-    t = np.linspace(0.0, Nsim * dt, Nsim + 1)
-    u_temp = np.vstack((u, u[-1, :]))
-    for i in range(Nu):
-        plt.subplot(Nu, 1, i + 1)
-        plt.step(t, u_temp[:, i] , 'k', where='post')
-        plt.ylabel('Flow  ' + str(i + 1) + ' [ml/s]')
-        plt.suptitle('Control inputs', fontsize=16)
-    plt.xlabel('Time [s]')
-    plt.tight_layout(pad=1)
-    plt.subplots_adjust(top=0.90)
-    plt.savefig("mpc_control.png", bbox_inches="tight")
-    plt.show()
+    if plot:
+        x_sp = np.ones((Nsim + 1, Ny)) * mean_ref
+        fig_x, fig_u = plot_mpc(x=mean, u=u, dt=dt, x_pred=mean_prediction, 
+                           var_pred=var_prediction, x_sp=x_sp,
+                           xnames=['Tank %d [cm]' % (i + 1) for i in range(Nx)],
+                           unames=['Flow input %d [ml/s]' % (i + 1) for i in range(Nx)],
+                           title='MPC with %d step/ %d s horizon - GP: %s' % (Nt, horizon, method)
+                       )
+        fig_x.savefig("mpc.png", bbox_inches="tight")
+
+    return mean, u
+
+
+def plot_mpc(x, u, dt, x_pred=None, var_pred=None, x_sp=None, title=None, 
+             xnames=None, unames=None, time_unit = 's', numcols=2):
+    Nu = np.size(u, 1)
+    Nt_sim, Nx = x.shape
+    Nt_horizon = np.size(x_pred, 0)
+    if xnames is None:
+        xnames = ['State %d' % (i + 1) for i in range(Nx)]
+    if unames is None:
+        unames = ['Control %d' % (i + 1) for i in range(Nu)]
     
-    plt.figure()
-    t = np.linspace(0.0, Nsim * dt, Nsim + 1)
-    t2 = np.linspace(0.0, Nt * dt, Nt + 1)
-    fontP = FontProperties()
-    fontP.set_size('small')
-    
+    t = np.linspace(0.0, Nt_sim * dt, Nt_sim)
+    t_horizon = np.linspace(0.0, Nt_horizon * dt, Nt_horizon)
+
+    u = np.vstack((u, u[-1, :]))
     numcols = 2 
-    numrows = 2
-    ax = []
-    for i in range(Ny):
-        ax.append( plt.subplot(numrows, numcols, i + 1))
-        plt.plot(t, mean[:, i], 'b-', marker='.', linewidth=1.0, label='Simulation')
-        plt.axhline(y=mean_ref[i], color='g', linestyle='--', label='Set point')
-        plt.errorbar(t2, mean_prediction[:, i], yerr=2 * np.sqrt(var_prediction[:, i]), 
+    numrows = int(np.ceil(Nx / numcols))
+
+    fig_u = plt.figure() 
+    for i in range(Nu):
+        ax = fig_u.add_subplot(Nu, 1, i + 1)
+        ax.step(t, u[:, i] , 'k', where='post')
+        ax.set_ylabel(unames[i])
+        ax.set_xlabel('Time [' + time_unit + ']')
+    fig_u.canvas.set_window_title('Control inputs')
+
+    fig_x = plt.figure() 
+    for i in range(Nx):
+        ax = fig_x.add_subplot(numrows, numcols, i + 1)
+        ax.plot(t, x[:, i], 'b-', marker='.', linewidth=1.0, label='Simulation')
+        if x_sp is not None:
+            #ax.axhline(y=x_sp[i], color='g', linestyle='--', label='Setpoint')
+            ax.plot(t, x_sp[:, i], color='g', linestyle='--', label='Setpoint')
+        ax.errorbar(t_horizon, x_pred[:, i], yerr=2 * np.sqrt(var_pred[:, i]), 
                      linestyle='None', marker='.', color='r', label='1st prediction')
         #plt.plot(t2, mean_prediction[:, i], 'r.', label='1st prediction')
         #plt.gca().fill_between(t2.flat, mean_prediction[:, i] - 
         #       2 * np.sqrt(var_prediction[:, i]), mean_prediction[:, i] + 
         #       2 * np.sqrt(var_prediction[:, i]), color="#bbbbbb", label='95% conf prediction')
-        plt.ylabel('Tank ' + str(i + 1) + ' [cm]')
-        plt.suptitle('MPC with ' + str(Nt) + ' step/' + 
-                     str(horizon) + 's horizon', fontsize=16)
-
-        plt.xlabel('Time [s]')
+        plt.legend(loc='best')
+        ax.set_ylabel(xnames[i])
+        ax.set_xlabel('Time [' + time_unit + ']')
     #ax[1].legend(prop=fontP, bbox_to_anchor=(1.04,0.5), loc="center left", borderaxespad=0 )
-    ax[1].legend(prop=fontP, loc="best" )
+    #ax[1].legend(prop=fontP, loc="best" )
     #plt.tight_layout(pad=1, rect=[0,0,0.75,1])
-    plt.tight_layout(pad=1)
-    plt.subplots_adjust(top=0.90)
-    #plt.subplots_adjust(right=0.7)
-    plt.savefig("mpc.png", bbox_inches="tight")
-    plt.show()
+    #plt.tight_layout(pad=.1)
+    if title is not None:
+        fig_x.canvas.set_window_title(title)
 
-    return mean, u
-
+    return fig_x, fig_u

@@ -26,7 +26,7 @@ simTime = 300                           # Simulation time in seconds
 
 
 # Regression data
-npoints = 20                           # Number of data points generated
+npoints = 2                          # Number of data points generated
 u_min = np.array([0., 0.])             # lower bound of control inputs [ml/s]
 u_max = np.array([60., 60.])           # upper bound of control inputs [ml/s]
 x_min = np.array([0., 0., 0., 0.])     # lower bound of expected minimum state [cm]
@@ -79,31 +79,33 @@ def integrate_system(ndstate, nastate, u, t0, tf, x0):
 # -----------------------------------------------------------------------------
 # Simulate and plot system
 # -----------------------------------------------------------------------------
-def sim_system(x0, u, simTime, deltat, noise=False):
-    simPoints = int(simTime / deltat)
+def sim_system(x0, u, simTime, dt, noise=False):
+    simPoints = int(simTime / dt)
     # Predefine matrix to collect control inputs
+    #u = np.exp(u)
     u_matrix = u
-
+    
     # Initial state of the system
+    #x0 = np.exp(x0)
     x = x0
-
+    #x = np.array([60,0,12,60.1])
     # Predefine matrix to collect noisy state outputs
     Y_sim = np.zeros((simPoints, ndstate))
 
-    for dt in range(simPoints):
+    for t in range(simPoints):
         t0i = 0.                 # start time of integrator
-        tfi = deltat             # end time of integrator
-        u_s = u_matrix[dt, :]    # control input for simulation
-
+        tfi = dt                 # end time of integrator
+        u_s = u_matrix[t, :]    # control input for simulation
+        #u_s = np.array([6.e+2, 1.e-2])
         # simulate system
         x = integrate_system(ndstate, nastate, u_s, t0i, tfi, x)[:, 0]
 
         # save simulated state with normal white noise added
         if noise:
-            Y_sim[dt, :] = x + np.random.multivariate_normal(np.zeros((ndstate)), R)
+            Y_sim[t, :] = x + np.random.multivariate_normal(np.zeros((ndstate)), R)
         else:
-            Y_sim[dt, :] = x
-
+            Y_sim[t, :] = x
+        #Y_sim = np.log(Y_sim)
     return Y_sim
 
 
@@ -117,7 +119,7 @@ def generate_training_data():
 
     # Create control input design using a latin hypecube
     # Latin hypercube design for unit cube [0,1]^ndstate
-    u_matrix = pyDOE.lhs(ninput, samples=npoints, criterion='maximin')
+    u_matrix = pyDOE.lhs(ninput, samples=npoints)
 
     # Scale control inputs to correct range
     for k in range(npoints):
@@ -125,7 +127,7 @@ def generate_training_data():
 
     # Create state input design using a latin hypecube
     # Latin hypercube design for unit cube [0,1]^ndstate
-    X_mat = pyDOE.lhs(ndstate, samples=npoints, criterion='maximin')
+    X_mat = pyDOE.lhs(ndstate, samples=npoints)
 
     # Scale state inputs to correct range
     for k in range(npoints):

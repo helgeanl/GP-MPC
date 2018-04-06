@@ -209,31 +209,16 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
 
 if __name__ == "__main__":
     X = np.loadtxt(dir_data + 'X_matrix_tank')
-
     Y = np.loadtxt(dir_data + 'Y_matrix_tank')
+    #X = np.log(X)
+    #Y = np.log(Y)
     optimize = True
     N, Nx = X.shape  # Number of sampling points and inputs
     Ny = Y.shape[1]  # Number of outputs
 
-    x1 = X[:, 0].reshape(N, 1)
-    x2 = X[:, 1].reshape(N, 1)
-    x3 = X[:, 2].reshape(N, 1)
-    x4 = X[:, 3].reshape(N, 1)
-    u1 = X[:, 4].reshape(N, 1)
-    u2 = X[:, 5].reshape(N, 1)
-    X1 = np.hstack((x1, x3, u1, u2))
-    X2 = np.hstack((x2, x4, u1, u2))
     invK = np.zeros((Ny, N, N))
     h = 2
-    #K1, K2 = train_gp_casadi(X, Y[:, 0], 0)
-   # X, Y = standardize(X, Y, [0, 0, 0, 0,0,0], [80, 80, 80, 80,100,100])
 
-    #lbx = np.array([.0, .0, .0,  .0, .0,  .0])
-    #ubx = np.array([40., 40., 40., 40., 100., 100.])
-    #lby = np.array([0., 0., 0., 0.])
-    #uby = np.array([40., 40., 40., 40.])
-    #meanX = np.mean(X, 0)
-    #stdX = np.std(X, 0)
     meanY = np.mean(Y, 0)
     stdY = np.std(Y, 0)
     #meanY = meanX[:E]
@@ -242,11 +227,6 @@ if __name__ == "__main__":
     meanU = np.mean(X[:, Ny:], 0)
     meanX = np.concatenate([meanY, meanU])
     stdX = np.concatenate([stdY, stdU])
-    #X = scale_gaussian(X, meanX, stdX)
-    #X = scale_min_max(X, lbx, ubx)
-   
-    #Y = scale_gaussian(Y, meanY, stdY)
-    #Y = scale_min_max(Y, lby, uby)
 
     if optimize:
         hyper = train_gp(X, Y, meanFunc='zero')
@@ -273,14 +253,50 @@ if __name__ == "__main__":
 
     #u = np.array([21., 23.])
     #u_matrix = np.zeros((Nt, 2))
+    eps = 1e-3
     x0 = np.array([8., 10., 8., 18.])
+    x_sp = np.array([14., 14., 14.2, 21.3])
+    ulb = [eps, eps] 
+    uub = [60., 60.] 
+    xlb = [eps, eps, eps, eps]
+    xub = [28, 28, 28, 28]
+#    x0 = np.log(x0)
+#    x_sp = np.log(x_sp)
+#    ulb = np.log(ulb)
+#    uub = np.log(uub)
+#    xlb = np.log(xlb)
+#    xub = np.log(xub)
     #z = np.concatenate([x0, u])
-    #z = scaler.transform(z.reshape(1, -1))
-    #z = scale_gaussian(z, meanX, stdX)
-    #z = scale_min_max(z, lbx, ubx)
-    #mu, var = predict_casadi(X, Y, invK, hyper, z[:4], z[4:])
-    mean, u_mpc = mpc(X, Y, invK, hyper, method='TA')
-    mean, u_mpc = mpc(X, Y, invK, hyper, method='ME')
+
+    for i in range(3):
+        x, u = mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0, 
+                          sim_time=60.0, dt=30, method='TA', plot=False,
+                          ulb=ulb, uub=uub, xlb=xlb, xub=xub)
+        X = np.vstack((X, np.hstack((x[1:2], u[1:]))))
+        Y = np.vstack((Y, x[2:]))
+        
+        # Train again
+        N, Nx = X.shape  # Number of sampling points and inputs
+        Ny = Y.shape[1]  # Number of outputs
+        hyper = train_gp(X, Y, meanFunc='zero')
+        invK = np.zeros((Ny, N, N))
+        for i in range(Ny):
+            K = calc_cov_matrix(X, hyper[i, :Nx], hyper[i, Nx]**2)
+            K = K + hyper[i, Nx + 1]**2 * np.eye(N)  # Add noise variance to diagonal
+            K = (K + K.T) * 0.5   # Make sure matrix is symmentric
+            try:
+                L = np.linalg.cholesky(K)
+            except np.linalg.LinAlgError:
+                print("K matrix is not positive definit, adding jitter!")
+                K = K + np.eye(N) * 1e-8
+                L = np.linalg.cholesky(K)
+            invL = np.linalg.solve(L, np.eye(N))
+            invK[i, :, :] = np.linalg.solve(L.T, invL) 
+
+    x, u = mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0, 
+          sim_time=600.0, dt=30, method='TA', plot=True,
+          ulb=ulb, uub=uub, xlb=xlb, xub=xub)
+    #mean, u_mpc = mpc(X, Y, invK, hyper, method='ME')
     #mu, var  = predict_casadi(X, Y, invK, hyper, x0, u_mpc)
     #mu2, var2  = predict(X, Y, invK, hyper, x0, u)
     
