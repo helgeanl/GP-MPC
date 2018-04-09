@@ -16,7 +16,7 @@ import pyDOE
 import numpy as np
 import casadi as ca
 from scipy.spatial import distance
-
+from . gp_functions import get_mean_function
 
 # -----------------------------------------------------------------------------
 # Optimization of hyperperameters as a constrained minimization problem
@@ -40,33 +40,8 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
     ell = hyper[:Nx]
     sf2 = hyper[Nx]**2
     sn2 = hyper[Nx + 1]**2
-    
-    if meanFunc == 'zero':
-        dY = Y
-    elif meanFunc == 'const':
-        dY = Y - hyper[-1]
-    elif meanFunc == 'linear':
-        print('Linear mean function')
-        a_s = ca.SX.sym('a', Nx)
-        b_s = ca.SX.sym('b')
-        X_s = ca.SX.sym('X', N, Nx)
-        mean = ca.Function('mean', [X_s, a_s, b_s], 
-                          [ca.sum2(ca.transpose(a_s * X_s.T)) + b_s])
-        a = hyper[-Nx-1:-1]
-        b = hyper[-1]
-        dY = Y - mean(X, a, b)
-    elif meanFunc == 'polynomial':
-        a_s = ca.SX.sym('a', Nx)
-        b_s = ca.SX.sym('b', Nx)
-        c_s = ca.SX.sym('b')
-        X_s = ca.SX.sym('X', N, Nx)
-        mean = ca.Function('mean', [X_s, a_s, b_s, c_s], 
-                          [ca.sum2(ca.transpose(a_s * X_s.T**2)) +
-                          ca.sum2(ca.transpose(b_s * X_s.T)) + c_s])
-        a = hyper[-2*Nx-1:-Nx-1]
-        b = hyper[-Nx-1:-1]
-        c = hyper[-1]
-        dY = Y - mean(X, a, b, c)
+
+    m = get_mean_function(hyper, X, func=meanFunc)
 
     # Calculate covariance matrix
     K_s = ca.SX.sym('K_s',N, N)
@@ -96,7 +71,7 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
     Y_s = ca.SX.sym('Y', ca.MX.size(Y))
     L_s = ca.SX.sym('L', ca.Sparsity.lower(N))
     sol = ca.Function('sol', [L_s, Y_s], [ca.solve(L_s, Y_s)])
-    invLy = sol(L, dY)
+    invLy = sol(L, Y - m(X))
 
     invLy_s = ca.SX.sym('invLy', ca.MX.size(invLy))
     sol2 = ca.Function('sol2', [L_s, invLy_s], [ca.solve(L_s.T, invLy_s)])
@@ -105,7 +80,7 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
     alph = ca.SX.sym('alph', ca.MX.size(alpha))
     det = ca.SX.sym('det')
     NLL = ca.Function('NLL', [Y_s, alph, det], [0.5 * ca.mtimes(Y_s.T, alph) + 0.5 * det])
-    return NLL(dY, alpha, log_detK)
+    return NLL(Y - m(X), alpha, log_detK)
 
 
 def train_gp(X, Y, meanFunc='zero', hyper_init=None, multistart=1):
@@ -140,6 +115,8 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, multistart=1):
         h_m = Nx + 1
     elif meanFunc == 'polynomial':
         h_m = 2 * Nx + 1
+    else:
+        raise NameError('No mean function called: ' + meanFunc)
     
     h_ell   = Nx    # Number of length scales parameters
     h_sf    = 1     # Standard deviation function
@@ -154,7 +131,8 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, multistart=1):
     param_s      = ca.horzcat(squaredist_s, Y_s)
 
     NLL_func = ca.Function('NLL', [hyp_s, X_s, Y_s, squaredist_s],
-                           [calc_NLL(hyp_s, X_s, Y_s, squaredist_s)])
+                           [calc_NLL(hyp_s, X_s, Y_s, squaredist_s, 
+                                     meanFunc=meanFunc)])
     nlp = {'x': hyp_s, 'f': NLL_func(hyp_s, X, Y_s, squaredist_s), 'p': param_s}
     
     # NLP solver options
@@ -164,6 +142,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, multistart=1):
     opts['verbose']             = False
     opts['ipopt.print_level']   = 0
     opts['ipopt.linear_solver'] = 'ma27'
+    opts['ipopt.max_cpu_time'] = 1
     #opts["ipopt.max_iter"]     = 100
     #opts["ipopt.tol"]          = 1e-12
     #opts["ipopt.hessian_approximation"] = "limited-memory"
@@ -195,10 +174,10 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, multistart=1):
             ub[-h_m:-1] = 2
 
         if hyper_init is None:
-            hyp_init = pyDOE.lhs(num_hyp, samples=multistart)
+            hyp_init = pyDOE.lhs(num_hyp, samples=1).flatten()
             hyp_init = hyp_init * (ub - lb) + lb
         else:
-            hyp_init = hyper_init[output]
+            hyp_init = hyper_init[output, :]
 
         squaredist = np.zeros((N, N * Nx))
         for i in range(Nx):
@@ -211,10 +190,11 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, multistart=1):
     
         for i in range(multistart):
             solve_time = -time.time()
-            res = res = Solver(x0=hyp_init[i, :], lbx=lb, ubx=ub, p=param)
+            res = res = Solver(x0=hyp_init, lbx=lb, ubx=ub, p=param)
             status = Solver.stats()['return_status']
             obj[i] = res['f']
             hyp_opt_loc[i, :] = res['x']
+            hyp_init = res['x']
             solve_time += time.time()
             print("\t%d: %s - %f s" % (i, status, solve_time))
 

@@ -18,17 +18,50 @@ def covSEard(x, z, ell, sf2):
     dist = ca.sum1((x - z)**2 / ell**2)
     return sf2 * ca.SX.exp(-.5 * dist)
 
-"""
+
+
+
+def get_mean_function(hyper, X, func='zero'):
+    """ Get mean function
                 'zero':       m = 0 
                 'const':      m = a
                 'linear':     m(x) = aT*x + b
                 'polynomial': m(x) = xT*diag(a)*x + bT*x + c
-"""
+    """
 
-def meanlinear(a, b, X):
-    return a * X + b
+    N, Nx = X.shape
+    X_s = ca.SX.sym('x', N, Nx)
+    Z_s = ca.MX.sym('x', N, Nx)
+    m = ca.SX(N, 1)
+    hyp_s = ca.SX.sym('hyper', hyper.shape)
+    if func == 'zero': 
+        a = ca.SX(1,1)
+        meanF = ca.Function('mean', [X_s, hyp_s], [a])
+    elif func == 'const':
+        a =  hyp_s[-1]
+        for i in range(N):
+            m[i] = a
+        meanF = ca.Function('mean', [X_s, hyp_s], [m])
+    elif func == 'linear':
+        a = hyp_s[-Nx-1:-1]
+        b = hyp_s[-1]
+        for i in range(N):
+            m[i] = ca.mtimes(a, X_s[i, :].T) + b
+        meanF = ca.Function('mean', [X_s, hyp_s], [m])
+    elif func == 'polynomial':
+        a = hyp_s[-2*Nx-1:-Nx-1]
+        b = hyp_s[-Nx-1:-1]
+        c = hyp_s[-1]
+        for i in range(N):
+            m[i] = ca.mtimes(a, X_s[i, :].T**2) + ca.mtimes(b, X_s[i, :].T) + c
+        meanF = ca.Function('mean', [X_s, hyp_s], [m])
+    else:
+        raise NameError('No mean function called: ' + func)
+    
+    return ca.Function('mean', [Z_s], [meanF(Z_s, hyper)])
 
-def gp(invK, X, Y, hyp, z,  meanFunc='zero'):
+
+def gp(invK, X, Y, hyper, z,  meanFunc='zero'):
     """ Gaussian Process
 
     # Arguments
@@ -37,7 +70,7 @@ def gp(invK, X, Y, hyp, z,  meanFunc='zero'):
         X: Training data matrix with inputs of size NxNx, with Nx number of
             inputs to the GP.
         Y: Training data matrix with outpyts of size (N x Ny).
-        hyp: Array with hyperparameters [ell_1 .. ell_Nx sf sn].
+        hyper: Array with hyperparameters [ell_1 .. ell_Nx sf sn].
         z: Input to the GP of size 1xD
 
     # Returns
@@ -60,52 +93,25 @@ def gp(invK, X, Y, hyp, z,  meanFunc='zero'):
                           [covSEard(x_s, z_s, ell_s, sf2_s)])
     
     for output in range(Ny):
-        if meanFunc == 'zero':
-            m = ca.MX(1,1)
-        elif meanFunc == 'const':
-            m =  hyp[output, -1]
-        elif meanFunc == 'linear':
-            print('Linear mean function')
-            a_s = ca.SX.sym('a', Nx)
-            b_s = ca.SX.sym('b')
-            X_s = ca.SX.sym('X', 1, Nx)
-            meanF = ca.Function('mean', [X_s, a_s, b_s], 
-                              [ca.sum2(ca.transpose(a_s * X_s.T)) + b_s])
-            a = hyp[output, -Nx-1:-1]
-            b = hyp[output, -1]
-            m = meanF(z, a, b)
-        elif meanFunc == 'polynomial':
-            a_s = ca.SX.sym('a', Nx)
-            b_s = ca.SX.sym('b', Nx)
-            c_s = ca.SX.sym('b')
-            X_s = ca.SX.sym('X', 1, Nx)
-            meanF = ca.Function('mean', [X_s, a_s, b_s, c_s], 
-                              [ca.sum2(ca.transpose(a_s * X_s.T**2)) + 
-                               ca.sum2(ca.transpose(b_s * X_s.T)) + c_s])
-            a = hyp[output, -2*Nx-1:-Nx-1]
-            b = hyp[output, -Nx-1:-1]
-            c = hyp[output, -1]
-            m = meanF(z, a, b, c)
-            
-        ell = ca.MX(hyp[output, 0:Nx])
-        sf2 = ca.MX(hyp[output, Nx]**2)
-        #m = hyp[a, D + 2]
+        m = get_mean_function(hyper[output, :], z, func=meanFunc)
+        ell = ca.MX(hyper[output, 0:Nx])
+        sf2 = ca.MX(hyper[output, Nx]**2)
         
         kss = covSE(z, z, ell, sf2)
-        
         ks = ca.MX.zeros(N, 1)
         for i in range(N):
             ks[i] = covSE(X[i, :], z, ell, sf2)
 
         ksK = ca.mtimes(ks.T, invK[output])
 
-        mean[output] = ca.mtimes(ksK, Y[:, output] - m) + m
+        mean[output] = ca.mtimes(ksK, Y[:, output] - m(z)) + m(z)
         var[output] = kss - ca.mtimes(ksK, ks)
 
     return mean, var
 
 
-def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar, diag=False):
+def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar,
+                     meanFunc='zero', diag=False):
     """ Gaussian Process with Taylor Approximation
 
     This uses a first order taylor for the mean evaluation (a normal GP mean),
@@ -149,8 +155,9 @@ def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar, diag=False):
         ell = hyper[a, :Nx]
         w = 1 / ell**2
         sf2 = ca.MX(hyper[a, Nx]**2)
+        m = get_mean_function(hyper[a, :], inputmean, func=meanFunc)
         iK = ca.MX(invK[a])
-        alpha = ca.mtimes(iK, Y[:, a])
+        alpha = ca.mtimes(iK, Y[:, a] - m(inputmean)) + m(inputmean)
         kss = sf2
         
         ks = ca.MX.zeros(N, 1)

@@ -57,7 +57,8 @@ def cost_l(x, x_ref, covar_x, u, Q, R, K, s=1):
 
 
 def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, 
-        ulb=None, uub=None, xlb=None, xub=None, method='TA', plot=False):
+        ulb=None, uub=None, xlb=None, xub=None, terminal_constraint = None,
+        feedback=False, method='TA', plot=False, meanFunc='zero'):
     """ Model Predictive Control
     
     # Arguments:
@@ -97,14 +98,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
     #K = np.zeros((Nu, Ny)) # * .5
     K = np.array([[1.8, .0, .5, .0], 
                   [.0, 1.8, .0, .5]]) * 0.0
-
     
-#    ulb = [0., 0.]
-#    uub = [60., 60.] 
-#    xlb = [0, 0, 0, 0]
-#    xub = [28, 28, 28, 28]
-    #terminal_constraint = 1e3
-    terminal_constraint = None
     # Initial state
     mean_0 = x0 #np.array([8., 10., 8., 18.])
     mean_ref = x_sp #np.array([14., 14., 14.2, 21.3])
@@ -118,20 +112,26 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
     
     if method is 'ME':
         gp_func = ca.Function('gp_mean', [z_s, variance_s], 
-                            gp(invK, ca.MX(X), ca.MX(Y), ca.MX(hyper), z_s.T, meanFunc='zero'))
+                            gp(invK, ca.MX(X), ca.MX(Y), ca.MX(hyper), 
+                               z_s.T, meanFunc=meanFunc))
     elif method is 'TA':
         gp_func = ca.Function('gp_taylor_approx', [z_s, variance_s],
                             gp_taylor_approx(invK, ca.MX(X), ca.MX(Y), 
-                                             ca.MX(hyper), z_s.T, variance_s, diag=True))
+                                             ca.MX(hyper), z_s.T, variance_s, 
+                                             meanFunc=meanFunc, diag=True))
 
     # Define stage cost and terminal cost
     l_func = ca.Function('l', [mean_s, covar_x_s, v_s], 
-                           [cost_l(mean_s, ca.MX(mean_ref), covar_x_s, v_s, ca.MX(Q), ca.MX(R), ca.MX(K))])
+                           [cost_l(mean_s, ca.MX(mean_ref), covar_x_s, v_s, 
+                                   ca.MX(Q), ca.MX(R), ca.MX(K))])
     lf_func = ca.Function('lf', [mean_s, covar_x_s], 
                            [cost_lf(mean_s, ca.MX(mean_ref), covar_x_s,  ca.MX(P))])
     # Feedback function
-    #u_func = ca.Function('u', [mean_s, v_s], [ca.mtimes(ca.MX(K), mean_s - ca.MX(mean_ref)) + v_s])
-    u_func = ca.Function('u', [mean_s, v_s], [v_s])
+    if feedback:
+        u_func = ca.Function('u', [mean_s, v_s], [ca.mtimes(ca.MX(K),
+                             mean_s - ca.MX(mean_ref)) + v_s])
+    else:
+        u_func = ca.Function('u', [mean_s, v_s], [v_s])
     # Create variables struct
     var = ctools.struct_symMX([(
             ctools.entry('mean', shape=(Ny,), repeat=Nt + 1),
@@ -146,9 +146,13 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
     # Adjust the relevant constraints
     for t in range(Nt):
         if ulb is not None:
-            varlb['v', t, :] = ulb # - np.dot(K, xub)
+            varlb['v', t, :] = ulb
+            if feedback:
+                varlb['v', t, :] = ulb - np.dot(K, xub)
         if uub is not None:
-            varub['v', t, :] = uub #- np.dot(K, xlb)
+            varub['v', t, :] = uub
+            if feedback:
+                varub['v', t, :] = uub - np.dot(K, xlb)
         if xlb is not None:
             varlb['mean', t, :] = xlb
         if xub is not None:

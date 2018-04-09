@@ -217,19 +217,11 @@ if __name__ == "__main__":
     Ny = Y.shape[1]  # Number of outputs
 
     invK = np.zeros((Ny, N, N))
-    h = 2
+    meanFunc = 'zero'
 
-    meanY = np.mean(Y, 0)
-    stdY = np.std(Y, 0)
-    #meanY = meanX[:E]
-    #stdY = meanX[:E]
-    stdU = np.std(X[:, Ny:], 0)
-    meanU = np.mean(X[:, Ny:], 0)
-    meanX = np.concatenate([meanY, meanU])
-    stdX = np.concatenate([stdY, stdU])
 
     if optimize:
-        hyper = train_gp(X, Y, meanFunc='zero')
+        hyper = train_gp(X, Y, meanFunc=meanFunc)
         for i in range(Ny):
             K = calc_cov_matrix(X, hyper[i, :Nx], hyper[i, Nx]**2)
             K = K + hyper[i, Nx + 1]**2 * np.eye(N)  # Add noise variance to diagonal
@@ -267,18 +259,19 @@ if __name__ == "__main__":
 #    xlb = np.log(xlb)
 #    xub = np.log(xub)
     #z = np.concatenate([x0, u])
-
-    for i in range(3):
+    x0_ = x0
+    for i in range(10):
         x, u = mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0, 
                           sim_time=60.0, dt=30, method='TA', plot=False,
-                          ulb=ulb, uub=uub, xlb=xlb, xub=xub)
+                          ulb=ulb, uub=uub, xlb=xlb, xub=xub,
+                          meanFunc=meanFunc)
         X = np.vstack((X, np.hstack((x[1:2], u[1:]))))
         Y = np.vstack((Y, x[2:]))
-        
+        x0_ = x
         # Train again
         N, Nx = X.shape  # Number of sampling points and inputs
         Ny = Y.shape[1]  # Number of outputs
-        hyper = train_gp(X, Y, meanFunc='zero')
+        hyper = train_gp(X, Y, meanFunc=meanFunc, hyper_init=hyper)
         invK = np.zeros((Ny, N, N))
         for i in range(Ny):
             K = calc_cov_matrix(X, hyper[i, :Nx], hyper[i, Nx]**2)
@@ -295,7 +288,8 @@ if __name__ == "__main__":
 
     x, u = mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0, 
           sim_time=600.0, dt=30, method='TA', plot=True,
-          ulb=ulb, uub=uub, xlb=xlb, xub=xub)
+          ulb=ulb, uub=uub, xlb=xlb, xub=xub,
+          meanFunc=meanFunc, terminal_constraint=1e-1)
     #mean, u_mpc = mpc(X, Y, invK, hyper, method='ME')
     #mu, var  = predict_casadi(X, Y, invK, hyper, x0, u_mpc)
     #mu2, var2  = predict(X, Y, invK, hyper, x0, u)
