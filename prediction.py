@@ -172,11 +172,11 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
         sd_TA_i = np.sqrt(var_TA[:, i])
         sd_ME_i = np.sqrt(var_ME[:, i])
 
-        plt.gca().fill_between(t.flat, mu_EM_i - 2 * sd_EM_i, mu_EM_i + 
+        plt.gca().fill_between(t.flat, mu_EM_i - 2 * sd_EM_i, mu_EM_i +
                2 * sd_EM_i, color="#555555", label='95% conf interval EM')
-        plt.gca().fill_between(t.flat, mu_TA_i - 2 * sd_TA_i, mu_TA_i + 
+        plt.gca().fill_between(t.flat, mu_TA_i - 2 * sd_TA_i, mu_TA_i +
                2 * sd_TA_i, color="#FFFaaa", label='95% conf interval TA')
-        plt.gca().fill_between(t.flat, mu_ME_i - 2 * sd_ME_i, mu_ME_i + 
+        plt.gca().fill_between(t.flat, mu_ME_i - 2 * sd_ME_i, mu_ME_i +
                2 * sd_ME_i, color="#bbbbbb", label='95% conf interval ME')
 
         #plt.errorbar(t, mu_EM_i, yerr=2 * sd_EM_i, label='95% conf interval EM')
@@ -194,7 +194,7 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
         plt.xlabel('Time [s]')
         #plt.ylim([0, 40])
     plt.show()
-    
+
     plt.figure()
     u_temp = np.vstack((u, u[-1, :]))
     for i in range(Nu):
@@ -210,87 +210,48 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
 if __name__ == "__main__":
     X = np.loadtxt(dir_data + 'X_matrix_tank')
     Y = np.loadtxt(dir_data + 'Y_matrix_tank')
-    #X = np.log(X)
-    #Y = np.log(Y)
-    optimize = True
-    N, Nx = X.shape  # Number of sampling points and inputs
-    Ny = Y.shape[1]  # Number of outputs
 
-    invK = np.zeros((Ny, N, N))
+    optimize = True
     meanFunc = 'zero'
 
-
     if optimize:
-        hyper = train_gp(X, Y, meanFunc=meanFunc)
+        hyper, invK = train_gp(X, Y, meanFunc=meanFunc)
         for i in range(Ny):
-            K = calc_cov_matrix(X, hyper[i, :Nx], hyper[i, Nx]**2)
-            K = K + hyper[i, Nx + 1]**2 * np.eye(N)  # Add noise variance to diagonal
-            K = (K + K.T) * 0.5   # Make sure matrix is symmentric
-            try:
-                L = np.linalg.cholesky(K)
-            except np.linalg.LinAlgError:
-                print("K matrix is not positive definit, adding jitter!")
-                K = K + np.eye(N) * 1e-8
-                L = np.linalg.cholesky(K)
-            invL = np.linalg.solve(L, np.eye(N))
-            invK[i, :, :] = np.linalg.solve(L.T, invL)    # np.linalg.inv(K)
             np.savetxt(dir_parameters + 'invK' + str(i + 1), invK[i, :, :], delimiter=',')
         np.savetxt(dir_parameters + 'hyper_opt', hyper, delimiter=',')
-
     else:
         hyper = np.loadtxt(dir_parameters + 'hyper_opt', delimiter=',')
+        N, Nx = X.shape  # Number of sampling points and inputs
+        Ny = Y.shape[1]  # Number of outputs
+        invK = np.zeros((Ny, N, N))
         for i in range(Ny):
             invK[i, :, :] = np.loadtxt(dir_parameters + 'invK' + str(i + 1), delimiter=',')
-            #hyper[i, -1] = 0  # np.mean(Y[:, i])
 
-    #u = np.array([21., 23.])
-    #u_matrix = np.zeros((Nt, 2))
     eps = 1e-3
     x0 = np.array([8., 10., 8., 18.])
     x_sp = np.array([14., 14., 14.2, 21.3])
-    ulb = [eps, eps] 
-    uub = [60., 60.] 
+    ulb = [eps, eps]
+    uub = [60., 60.]
     xlb = [eps, eps, eps, eps]
     xub = [28, 28, 28, 28]
-#    x0 = np.log(x0)
-#    x_sp = np.log(x_sp)
-#    ulb = np.log(ulb)
-#    uub = np.log(uub)
-#    xlb = np.log(xlb)
-#    xub = np.log(xub)
-    #z = np.concatenate([x0, u])
+
     x0_ = x0
     for i in range(10):
-        x, u = mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0, 
+        x, u = mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0,
                           sim_time=60.0, dt=30, method='TA', plot=False,
                           ulb=ulb, uub=uub, xlb=xlb, xub=xub,
                           meanFunc=meanFunc)
         X = np.vstack((X, np.hstack((x[1:2], u[1:]))))
         Y = np.vstack((Y, x[2:]))
         x0_ = x
-        # Train again
-        N, Nx = X.shape  # Number of sampling points and inputs
-        Ny = Y.shape[1]  # Number of outputs
-        hyper = train_gp(X, Y, meanFunc=meanFunc, hyper_init=hyper)
-        invK = np.zeros((Ny, N, N))
-        for i in range(Ny):
-            K = calc_cov_matrix(X, hyper[i, :Nx], hyper[i, Nx]**2)
-            K = K + hyper[i, Nx + 1]**2 * np.eye(N)  # Add noise variance to diagonal
-            K = (K + K.T) * 0.5   # Make sure matrix is symmentric
-            try:
-                L = np.linalg.cholesky(K)
-            except np.linalg.LinAlgError:
-                print("K matrix is not positive definit, adding jitter!")
-                K = K + np.eye(N) * 1e-8
-                L = np.linalg.cholesky(K)
-            invL = np.linalg.solve(L, np.eye(N))
-            invK[i, :, :] = np.linalg.solve(L.T, invL) 
 
-    x, u = mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0, 
+        # Train again
+        hyper, invK = train_gp(X, Y, meanFunc=meanFunc, hyper_init=hyper)
+
+    x, u = mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0,
           sim_time=600.0, dt=30, method='TA', plot=True,
           ulb=ulb, uub=uub, xlb=xlb, xub=xub,
           meanFunc=meanFunc, terminal_constraint=1e-1)
     #mean, u_mpc = mpc(X, Y, invK, hyper, method='ME')
     #mu, var  = predict_casadi(X, Y, invK, hyper, x0, u_mpc)
     #mu2, var2  = predict(X, Y, invK, hyper, x0, u)
-    

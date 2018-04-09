@@ -83,7 +83,7 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
     return NLL(Y - m(X), alpha, log_detK)
 
 
-def train_gp(X, Y, meanFunc='zero', hyper_init=None, multistart=1):
+def train_gp(X, Y, meanFunc='zero', hyper_init=None, log=False, multistart=1):
     """ Train hyperparameters
 
     Maximum likelihood estimation is used to optimize the hyperparameters of
@@ -94,15 +94,19 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, multistart=1):
             of inputs to the GP.
         Y: Training data matrix with outpyts of size (N x Ny), with Ny number of outputs.
         meanFunc: String with the name of the wanted mean function.
-            Possible options: 
-                'zero':       m = 0 
+            Possible options:
+                'zero':       m = 0
                 'const':      m = a
                 'linear':     m(x) = aT*x + b
                 'polynomial': m(x) = xT*diag(a)*x + bT*x + c
-            
+
     # Return:
         hyp_pot: Array with the optimal hyperparameters [ell_1 .. ell_Nx sf sn].
     """
+
+    if log:
+        X = np.log(X)
+        Y = np.log(Y)
 
     N, Nx = X.shape
     Ny = Y.shape[1]
@@ -117,7 +121,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, multistart=1):
         h_m = 2 * Nx + 1
     else:
         raise NameError('No mean function called: ' + meanFunc)
-    
+
     h_ell   = Nx    # Number of length scales parameters
     h_sf    = 1     # Standard deviation function
     h_sn    = 1     # Standard deviation noise
@@ -131,10 +135,10 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, multistart=1):
     param_s      = ca.horzcat(squaredist_s, Y_s)
 
     NLL_func = ca.Function('NLL', [hyp_s, X_s, Y_s, squaredist_s],
-                           [calc_NLL(hyp_s, X_s, Y_s, squaredist_s, 
+                           [calc_NLL(hyp_s, X_s, Y_s, squaredist_s,
                                      meanFunc=meanFunc)])
     nlp = {'x': hyp_s, 'f': NLL_func(hyp_s, X, Y_s, squaredist_s), 'p': param_s}
-    
+
     # NLP solver options
     opts = {}
     opts['expand']              = True
@@ -149,6 +153,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, multistart=1):
     Solver = ca.nlpsol('Solver', 'ipopt', nlp, opts)
 
     hyp_opt = np.zeros((Ny, num_hyp))
+    invK = np.zeros((Ny, N, N))
     print('\n----------------------------------------')
     for output in range(Ny):
         print('Optimizing hyperparameters for state %d:' % output)
@@ -157,6 +162,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, multistart=1):
         meanF     = np.mean(Y)
         lb        = np.zeros(num_hyp)
         ub        = np.zeros(num_hyp)
+        ub[:]     = np.inf
         lb[:Nx]    = stdX / 20
         ub[:Nx]    = stdX * 20
         lb[Nx]     = stdF / 20
@@ -164,10 +170,10 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, multistart=1):
         lb[Nx + 1] = 10**-5 / 10
         ub[Nx + 1] = 10**-5 * 10
 
-        if meanFunc == 'const':
+        if meanFunc is 'const':
             lb[-1] = meanF / 5
             ub[-1] = meanF * 5
-        elif meanFunc != 'zero':
+        elif meanFunc is not 'zero':
             lb[-1] = meanF / 5
             ub[-1] = meanF * 5
             lb[-h_m:-1] = 0
@@ -187,7 +193,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, multistart=1):
 
         obj = np.zeros((multistart, 1))
         hyp_opt_loc = np.zeros((multistart, num_hyp))
-    
+
         for i in range(multistart):
             solve_time = -time.time()
             res = res = Solver(x0=hyp_init, lbx=lb, ubx=ub, p=param)
@@ -198,7 +204,26 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, multistart=1):
             solve_time += time.time()
             print("\t%d: %s - %f s" % (i, status, solve_time))
 
+        # With multistart, get solution with lowest decision function value
         hyp_opt[output, :] = hyp_opt_loc[np.argmin(obj)]
+        ell = hyp_opt[output, :Nx]
+        sf2 = hyp_opt[output, Nx]**2
+        sn2 = hyp_opt[output, Nx + 1]**2
+
+        # Calculate the inverse covariance matrix
+        K = np.zeros(N, N)
+        for i in range(Nx):
+            K = squaredist[:, (i  * N):(i + 1) * N] / ell**2 + K
+        K = K + sn2 * np.eye(N)     # Add noise variance to diagonal
+        K = (K + K.T) * 0.5         # Make sure matrix is symmentric
+        try:
+            L = np.linalg.cholesky(K)
+        except np.linalg.LinAlgError:
+            print("K matrix is not positive definit, adding jitter!")
+            K = K + np.eye(N) * 1e-8
+            L = np.linalg.cholesky(K)
+        invL = np.linalg.solve(L, np.eye(N))
+        invK[output, :, :] = np.linalg.solve(L.T, invL)    # np.linalg.inv(K)
     print('----------------------------------------')
 
-    return hyp_opt
+    return hyp_opt, invK

@@ -23,7 +23,7 @@ def covSEard(x, z, ell, sf2):
 
 def get_mean_function(hyper, X, func='zero'):
     """ Get mean function
-                'zero':       m = 0 
+                'zero':       m = 0
                 'const':      m = a
                 'linear':     m(x) = aT*x + b
                 'polynomial': m(x) = xT*diag(a)*x + bT*x + c
@@ -34,7 +34,7 @@ def get_mean_function(hyper, X, func='zero'):
     Z_s = ca.MX.sym('x', N, Nx)
     m = ca.SX(N, 1)
     hyp_s = ca.SX.sym('hyper', hyper.shape)
-    if func == 'zero': 
+    if func == 'zero':
         a = ca.SX(1,1)
         meanF = ca.Function('mean', [X_s, hyp_s], [a])
     elif func == 'const':
@@ -57,7 +57,7 @@ def get_mean_function(hyper, X, func='zero'):
         meanF = ca.Function('mean', [X_s, hyp_s], [m])
     else:
         raise NameError('No mean function called: ' + func)
-    
+
     return ca.Function('mean', [Z_s], [meanF(Z_s, hyper)])
 
 
@@ -65,7 +65,7 @@ def gp(invK, X, Y, hyper, z,  meanFunc='zero'):
     """ Gaussian Process
 
     # Arguments
-        invK: Array with the inverse covariance matrices of size (Ny x N x N), 
+        invK: Array with the inverse covariance matrices of size (Ny x N x N),
             with Ny number of outputs from the GP and N number of training points.
         X: Training data matrix with inputs of size NxNx, with Nx number of
             inputs to the GP.
@@ -83,20 +83,20 @@ def gp(invK, X, Y, hyper, z,  meanFunc='zero'):
 
     mean  = ca.MX.zeros(Ny, 1)
     var  = ca.MX.zeros(Ny, 1)
-    
+
     # Casadi symbols
     x_s = ca.SX.sym('x', Nx)
     z_s = ca.SX.sym('z', Nx)
     ell_s = ca.SX.sym('ell', Nx)
     sf2_s = ca.SX.sym('sf2')
-    covSE = ca.Function('covSE', [x_s, z_s, ell_s, sf2_s], 
+    covSE = ca.Function('covSE', [x_s, z_s, ell_s, sf2_s],
                           [covSEard(x_s, z_s, ell_s, sf2_s)])
-    
+
     for output in range(Ny):
         m = get_mean_function(hyper[output, :], z, func=meanFunc)
         ell = ca.MX(hyper[output, 0:Nx])
         sf2 = ca.MX(hyper[output, Nx]**2)
-        
+
         kss = covSE(z, z, ell, sf2)
         ks = ca.MX.zeros(N, 1)
         for i in range(N):
@@ -118,7 +118,7 @@ def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar,
     and a second order taylor for estimating the variance.
 
     # Arguments
-        invK: Array with the inverse covariance matrices of size (Ny x N x N), 
+        invK: Array with the inverse covariance matrices of size (Ny x N x N),
             with Ny number of outputs from the GP and N number of training points.
         X: Training data matrix with inputs of size NxNx, with Nx number of
             inputs to the GP.
@@ -142,13 +142,13 @@ def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar,
     covariance = ca.MX.zeros(Ny, Ny)
     d_mean = ca.MX.zeros(Ny, 1)
     dd_var = ca.MX.zeros(Ny, Ny)
-    
+
     # Casadi symbols
     x_s = ca.SX.sym('x', Nx)
     z_s = ca.SX.sym('z', Nx)
     ell_s = ca.SX.sym('ell', Nx)
     sf2_s = ca.SX.sym('sf2')
-    covSE = ca.Function('covSE', [x_s, z_s, ell_s, sf2_s], 
+    covSE = ca.Function('covSE', [x_s, z_s, ell_s, sf2_s],
                           [covSEard(x_s, z_s, ell_s, sf2_s)])
 
     for a in range(Ny):
@@ -159,7 +159,7 @@ def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar,
         iK = ca.MX(invK[a])
         alpha = ca.mtimes(iK, Y[:, a] - m(inputmean)) + m(inputmean)
         kss = sf2
-        
+
         ks = ca.MX.zeros(N, 1)
         for i in range(N):
             ks[i] = covSE(X[i, :], inputmean, ell, sf2)
@@ -177,14 +177,14 @@ def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar,
                 dd_var[d, e] = -2 * w[d] * w[e] * (dd_var1b + dd_var2)
                 if d == e:
                     dd_var[d, e] = dd_var[d, e] + 2 * w[d] * (kss - var[d])
-    
+
         covar1 = ca.mtimes(d_mean, d_mean.T)
         covar[0, 0] = inputvar[a]
         if diag:
             variance[a] = var[a] + ca.trace(ca.mtimes(covar, .5 * dd_var + covar1))
         else:
             covariance[a, a] = var[a] + ca.trace(ca.mtimes(covar, .5 * dd_var + covar1))
-    
+
     if diag:
         return [mean, variance]
     else:
@@ -199,7 +199,7 @@ def gp_exact_moment(invK, X, Y, hyper, inputmean, inputcov):
     zero prior mean function and the squared exponential kernel.
 
     # Arguments
-        invK: Array with the inverse covariance matrices of size (Ny x N x N), 
+        invK: Array with the inverse covariance matrices of size (Ny x N x N),
             with Ny number of outputs from the GP and N number of training points.
         X: Training data matrix with inputs of size NxNx, with Nx number of
             inputs to the GP.
