@@ -21,7 +21,7 @@ from matplotlib.font_manager import FontProperties
 from simulation.four_tank import sim_system
 from gp_casadi.gp_functions import gp, gp_exact_moment, gp_taylor_approx
 from gp_casadi.optimize import train_gp
-from gp_casadi.mpc import mpc
+from gp_casadi.mpc import mpc, plot_mpc
 from gp_numpy.gp_functions import calc_cov_matrix
 
 dir_data = 'data/'
@@ -73,11 +73,6 @@ def scale_gaussian_inverse(X_scaled, meanX, stdX):
 
 
 def predict_casadi(X, Y, invK, hyper, x0, u):
-
-    #X = np.log(X)
-    #Y = np.log(Y)
-    #x0 = np.log(x0)
-    #u = np.log(u)
 
     # Predict future
     N = X.shape[0]
@@ -144,21 +139,9 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
         mu_ME[t, :], var_ME[t, :] = mu, var
 
     t = np.linspace(0.0, simTime, Nt)
-    #u_matrix = np.zeros((Nt, 2))
-    #u = np.array([30., 30.])
-    #x0 = np.array([8., 10., 8., 18.])
-    #u_matrix[:, 0] = u[0]
-    #u_matrix[:, 1] = u[1]
     Y_sim = sim_system(x0, u, simTime, dt)
 
-    #mu_EM = scale_min_max_inverse(mu_EM, lby, uby)
-    #mu_TA = scale_min_max_inverse(mu_TA, lby, uby)
-    #mu_ME = scale_min_max_inverse(mu_ME, lby, uby)
-    #mu_EM = scale_gaussian_inverse(mu_EM, meanY, stdY)
-    #mu_TA = scale_gaussian_inverse(mu_TA,meanY, stdY)
-    #mu_ME = scale_gaussian_inverse(mu_ME, meanY, stdY)
 
-    #var_EM = scale_gaussian_inverse(var_EM, 0, 1)
     plt.figure()
     fontP = FontProperties()
     fontP.set_size('small')
@@ -207,27 +190,30 @@ def predict_casadi(X, Y, invK, hyper, x0, u):
     plt.show()
     return mu_EM, var_EM
 
+
 if __name__ == "__main__":
     X = np.loadtxt(dir_data + 'X_matrix_tank')
     Y = np.loadtxt(dir_data + 'Y_matrix_tank')
 
     optimize = True
     meanFunc = 'zero'
-
+    log = False
+    N, Nx = X.shape  # Number of sampling points and inputs
+    Ny = Y.shape[1]  # Number of outputs
     if optimize:
-        hyper, invK = train_gp(X, Y, meanFunc=meanFunc)
+        hyper, invK = train_gp(X, Y, meanFunc=meanFunc, log=log)
         for i in range(Ny):
             np.savetxt(dir_parameters + 'invK' + str(i + 1), invK[i, :, :], delimiter=',')
         np.savetxt(dir_parameters + 'hyper_opt', hyper, delimiter=',')
     else:
         hyper = np.loadtxt(dir_parameters + 'hyper_opt', delimiter=',')
-        N, Nx = X.shape  # Number of sampling points and inputs
-        Ny = Y.shape[1]  # Number of outputs
+
         invK = np.zeros((Ny, N, N))
         for i in range(Ny):
             invK[i, :, :] = np.loadtxt(dir_parameters + 'invK' + str(i + 1), delimiter=',')
 
     eps = 1e-3
+    dt = 30
     x0 = np.array([8., 10., 8., 18.])
     x_sp = np.array([14., 14., 14.2, 21.3])
     ulb = [eps, eps]
@@ -238,20 +224,21 @@ if __name__ == "__main__":
     x0_ = x0
     for i in range(10):
         x, u = mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0,
-                          sim_time=60.0, dt=30, method='TA', plot=False,
+                          sim_time=60.0, dt=dt, method='TA',
                           ulb=ulb, uub=uub, xlb=xlb, xub=xub,
-                          meanFunc=meanFunc)
+                          meanFunc=meanFunc, log=log)
         X = np.vstack((X, np.hstack((x[1:2], u[1:]))))
         Y = np.vstack((Y, x[2:]))
         x0_ = x
 
         # Train again
-        hyper, invK = train_gp(X, Y, meanFunc=meanFunc, hyper_init=hyper)
+        hyper, invK = train_gp(X, Y, meanFunc=meanFunc, hyper_init=hyper, log=log)
 
-    x, u = mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0,
-          sim_time=600.0, dt=30, method='TA', plot=True,
-          ulb=ulb, uub=uub, xlb=xlb, xub=xub,
-          meanFunc=meanFunc, terminal_constraint=1e-1)
+    x, u= mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0,
+          sim_time=600.0, dt=dt, method='TA',
+          ulb=ulb, uub=uub, xlb=xlb, xub=xub, plot=True,
+          meanFunc=meanFunc, terminal_constraint=1e-1, log=log)
+    
     #mean, u_mpc = mpc(X, Y, invK, hyper, method='ME')
     #mu, var  = predict_casadi(X, Y, invK, hyper, x0, u_mpc)
     #mu2, var2  = predict(X, Y, invK, hyper, x0, u)

@@ -162,7 +162,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, log=False, multistart=1):
         meanF     = np.mean(Y)
         lb        = np.zeros(num_hyp)
         ub        = np.zeros(num_hyp)
-        ub[:]     = np.inf
+        #ub[:]     = np.inf
         lb[:Nx]    = stdX / 20
         ub[:Nx]    = stdX * 20
         lb[Nx]     = stdF / 20
@@ -211,9 +211,10 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, log=False, multistart=1):
         sn2 = hyp_opt[output, Nx + 1]**2
 
         # Calculate the inverse covariance matrix
-        K = np.zeros(N, N)
+        K = np.zeros((N, N))
         for i in range(Nx):
-            K = squaredist[:, (i  * N):(i + 1) * N] / ell**2 + K
+            K = squaredist[:, (i  * N):(i + 1) * N] / ell[i]**2 + K
+        K = sf2 * np.exp(-.5 * K)
         K = K + sn2 * np.eye(N)     # Add noise variance to diagonal
         K = (K + K.T) * 0.5         # Make sure matrix is symmentric
         try:

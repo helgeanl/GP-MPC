@@ -58,7 +58,7 @@ def cost_l(x, x_ref, covar_x, u, Q, R, K, s=1):
 
 def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
         ulb=None, uub=None, xlb=None, xub=None, terminal_constraint = None,
-        feedback=False, method='TA', log=False, plot=False, meanFunc='zero'):
+        feedback=False, method='TA', log=False, meanFunc='zero', plot=False):
     """ Model Predictive Control
 
     # Arguments:
@@ -213,8 +213,9 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
     print('\nSolving MPC with %d step horizon' % Nt)
     for t in range(Nsim):
         solve_time = -time.time()
-        mean_t = np.mean[t, :]
+        mean_t = mean[t, :]
         if log:
+            print(mean_t)
             mean_t = np.log(mean_t)
         # Fix initial state
         varlb['mean', 0, :] = mean_t
@@ -236,13 +237,13 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
         solve_time += time.time()
 
         if t == 0:
-            var_prediction = optvar['variance'].full()
-            mean_prediction = optvar['mean'].full()
-            # var_prediction = np.zeros((Nt + 1, Ny))
-            # mean_prediction = np.zeros((Nt + 1, Ny))
-            # for i in range(Nt + 1):
-            #     var_prediction[i, :] = np.array(optvar['variance', i, :]).flatten()
-            #     mean_prediction[i, :] = np.array(optvar['mean', i, :]).flatten()
+            #var_prediction = [np.array(optvar['variance', i, :]).flatten() for i in range(Nt + 1)]
+            #mean_prediction = [np.array(optvar['mean', i, :]).flatten() for i in range(Nt + 1)]
+             var_prediction = np.zeros((Nt + 1, Ny))
+             mean_prediction = np.zeros((Nt + 1, Ny))
+             for i in range(Nt + 1):
+                 var_prediction[i, :] = np.array(optvar['variance', i, :]).flatten()
+                 mean_prediction[i, :] = np.array(optvar['mean', i, :]).flatten()
 
         v = optvar['v', 0, :]
         u[t, :] = np.array(u_func(mean[t, :], v)).flatten()
@@ -253,7 +254,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
 
         # Simulate the next step
         try:
-            mean[t + 1, :] = sim_system(np.mean[t, :], u[t, :].reshape((1, 2)),
+            mean[t + 1, :] = sim_system(mean[t, :], u[t, :].reshape((1, 2)),
                                 dt, dt, noise=True)
         except RuntimeError:
             print('********************************')
@@ -266,17 +267,13 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
                 mean = mean +  1e-3
             mean[t + 1, :] = sim_system(mean[t, :], u[t, :].reshape((1, 2)),
                                 dt, dt, noise=True)
-
     if plot:
         x_sp = np.ones((Nsim + 1, Ny)) * x_sp
         fig_x, fig_u = plot_mpc(x=mean, u=u, dt=dt, x_pred=mean_prediction,
-                           var_pred=var_prediction, x_sp=x_sp,
-                           xnames=['Tank %d [cm]' % (i + 1) for i in range(Nx)],
-                           unames=['Flow input %d [ml/s]' % (i + 1) for i in range(Nx)],
-                           title='MPC with %d step/ %d s horizon - GP: %s' % (Nt, horizon, method)
-                       )
+                   var_pred=var_prediction, x_sp=x_sp,
+                   title='MPC with %d step/ %d s horizon - GP: %s' % (Nt, horizon, method)
+               )
         fig_x.savefig("mpc.png", bbox_inches="tight")
-
     return mean, u
 
 
@@ -284,15 +281,15 @@ def plot_mpc(x, u, dt, x_pred=None, var_pred=None, x_sp=None, title=None,
              xnames=None, unames=None, time_unit = 's', numcols=2):
     Nu = np.size(u, 1)
     Nt_sim, Nx = x.shape
-    Nt_horizon = np.size(x_pred, 0)
+    if x_pred is not None:
+        Nt_horizon = np.size(x_pred, 0)
+        t_horizon = np.linspace(0.0, Nt_horizon * dt, Nt_horizon)
     if xnames is None:
         xnames = ['State %d' % (i + 1) for i in range(Nx)]
     if unames is None:
         unames = ['Control %d' % (i + 1) for i in range(Nu)]
 
     t = np.linspace(0.0, Nt_sim * dt, Nt_sim)
-    t_horizon = np.linspace(0.0, Nt_horizon * dt, Nt_horizon)
-
     u = np.vstack((u, u[-1, :]))
     numcols = 2
     numrows = int(np.ceil(Nx / numcols))
@@ -311,8 +308,9 @@ def plot_mpc(x, u, dt, x_pred=None, var_pred=None, x_sp=None, title=None,
         ax.plot(t, x[:, i], 'b-', marker='.', linewidth=1.0, label='Simulation')
         if x_sp is not None:
             ax.plot(t, x_sp[:, i], color='g', linestyle='--', label='Setpoint')
-        ax.errorbar(t_horizon, x_pred[:, i], yerr=2 * np.sqrt(var_pred[:, i]),
-                     linestyle='None', marker='.', color='r', label='1st prediction')
+        if x_pred is not None:
+            ax.errorbar(t_horizon, x_pred[:, i], yerr=2 * np.sqrt(var_pred[:, i]),
+                        linestyle='None', marker='.', color='r', label='1st prediction')
         #plt.plot(t2, mean_prediction[:, i], 'r.', label='1st prediction')
         #plt.gca().fill_between(t2.flat, mean_prediction[:, i] -
         #       2 * np.sqrt(var_prediction[:, i]), mean_prediction[:, i] +
