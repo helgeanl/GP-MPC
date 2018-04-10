@@ -14,16 +14,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 import casadi as ca
 import casadi.tools as ctools
-from matplotlib.font_manager import FontProperties
-from simulation.four_tank import sim_system
+#from matplotlib.font_manager import FontProperties
 from . gp_functions import gp_taylor_approx, gp
 
 
-def cost_lf(x, x_ref, covar_x, P, s=2):
-    # Cost function
+def cost_lf(x, x_ref, covar_x, P, s=1):
+    """ Terminal cost function: Expected Value of Quadratic Cost
+    """
     P_s = ca.SX.sym('Q', ca.MX.size(P))
     x_s = ca.SX.sym('x', ca.MX.size(x))
-    covar_x_s = ca.SX.sym('K', ca.MX.size(covar_x))
+    covar_x_s = ca.SX.sym('covar_x', ca.MX.size(covar_x))
 
     sqnorm_x = ca.Function('sqnorm_x', [x_s, P_s],
                            [ca.mtimes(x_s.T, ca.mtimes(P_s, x_s))])
@@ -32,13 +32,53 @@ def cost_lf(x, x_ref, covar_x, P, s=2):
     return sqnorm_x(x - x_ref, P) + trace_x(P, covar_x)
 
 
+#def cost_saturation_lf(x, x_ref, covar_x, P):
+#    """ Terminal cost function: Expected Value of Saturating Cost
+#    """
+#    P_s = ca.SX.sym('Q', ca.MX.size(P))
+#    x_s = ca.SX.sym('x', ca.MX.size(x))
+#    Nx = ca.MX.size1(covar_x)
+#    covar_x_s = ca.SX.sym('covar_x', Nx, Nx)
+#    
+#    R = ca.SX.eye(Nx) + 2 * ca.mtimes(covar_x_s, P_s)
+#    S = ca.Function('S', [covar_x_s, P_s], [ca.solve(R.T, P_s.T).T])
+#    sqnorm_x = ca.Function('sqnorm_x', [x_s, covar_x_s, P_s],
+#                           [ca.mtimes(x_s.T, ca.mtimes(S(covar_x_s, P_s), x_s))])
+#
+#    detR = ca.Function('detR', [covar_x_s, P_s], [ca.det(R)])
+#
+#    return detR(covar_x, P)**-0.5 * ca.exp(-sqnorm_x(x - x_ref, covar_x, P))
+
+
+def cost_saturation(z, covar_z, M):
+    """ Cost function: Expected Value of Saturating Cost
+    """
+    M_s = ca.SX.sym('M', ca.MX.size(M))
+    z_s = ca.SX.sym('z', ca.MX.size(z))
+    Nz = ca.MX.size1(covar_z)
+    covar_z_s = ca.SX.sym('covar_z', Nz, Nz)
+    
+    R = ca.SX.eye(Nz) + 2 * ca.mtimes(covar_z_s, M_s)
+    invR = ca.inv(R)
+    #S = ca.Function('S', [covar_z_s, M_s], [ca.solve(R.T, M_s.T).T])
+    S = ca.Function('S', [covar_z_s, M_s], [ca.mtimes(M_s, invR)])
+    sqnorm_z = ca.Function('sqnorm_z', [z_s, covar_z_s, M_s],
+                           [ca.mtimes(z_s.T, ca.mtimes(S(covar_z_s, M_s), z_s))])
+
+    detR = ca.Function('detR', [covar_z_s, M_s], [ca.det(R)])
+
+    return detR(covar_z, M)**-0.5 * ca.exp(-sqnorm_z(z, covar_z, M))
+
+
 def cost_l(x, x_ref, covar_x, u, Q, R, K, s=1):
+    """ Stage cost function: Expected Value of Quadratic Cost
+    """
     Q_s = ca.SX.sym('Q', ca.MX.size(Q))
     R_s = ca.SX.sym('R', ca.MX.size(R))
     K_s = ca.SX.sym('K', ca.MX.size(K))
     x_s = ca.SX.sym('x', ca.MX.size(x))
     u_s = ca.SX.sym('u', ca.MX.size(u))
-    covar_x_s = ca.SX.sym('K', ca.MX.size(covar_x))
+    covar_x_s = ca.SX.sym('covar_x', ca.MX.size(covar_x))
     covar_u_s = ca.SX.sym('covar_u', ca.MX.size(R))
 
     sqnorm_x = ca.Function('sqnorm_x', [x_s, Q_s],
@@ -56,9 +96,10 @@ def cost_l(x, x_ref, covar_x, u, Q, R, K, s=1):
                  + trace_u(R, covar_u(covar_x, K))
 
 
-def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
-        ulb=None, uub=None, xlb=None, xub=None, terminal_constraint = None,
-        feedback=False, method='TA', log=False, meanFunc='zero', plot=False):
+def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
+        ulb=None, uub=None, xlb=None, xub=None, terminal_constraint=None,
+        feedback=False, method='TA', log=False, meanFunc='zero', 
+        costFunc='quad', plot=False):
     """ Model Predictive Control
 
     # Arguments:
@@ -80,7 +121,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
     Nsim = int(sim_time / dt)
 
     Nt = int(horizon / dt)
-    Ny = len(invK)
+    Ny = Y.shape[1]
     Nx = X.shape[1]
     Nu = Nx - Ny
 
@@ -95,9 +136,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
 #                  [.0, .0, .0, 31]])
     Q = np.eye(Ny) * 1
     R = np.eye(Nu) * 0.01
-    #K = np.zeros((Nu, Ny)) # * .5
-    K = np.array([[1.8, .0, .5, .0],
-                  [.0, 1.8, .0, .5]]) * 0.0
+    K = np.zeros((Nu, Ny))
 
     if log:
         X = np.log(X)
@@ -119,6 +158,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
     covar_x_s = ca.MX.sym('covar', Ny, Ny)
     v_s = ca.MX.sym('v', Nu)
     z_s = ca.vertcat(mean_s, v_s)
+    K_s = ca.MX.sym('K', Nu, Ny)
 
     if method is 'ME':
         gp_func = ca.Function('gp_mean', [z_s, variance_s],
@@ -129,19 +169,37 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
                             gp_taylor_approx(invK, ca.MX(X), ca.MX(Y),
                                              ca.MX(hyper), z_s.T, variance_s,
                                              meanFunc=meanFunc, diag=True))
+    else:
+        raise NameError('No GP method called: ' + method)
 
     # Define stage cost and terminal cost
-    l_func = ca.Function('l', [mean_s, covar_x_s, v_s],
+    if costFunc is 'quad':
+        l_func = ca.Function('l', [mean_s, covar_x_s, v_s],
                            [cost_l(mean_s, ca.MX(mean_ref), covar_x_s, v_s,
-                                   ca.MX(Q), ca.MX(R), ca.MX(K))])
-    lf_func = ca.Function('lf', [mean_s, covar_x_s],
-                           [cost_lf(mean_s, ca.MX(mean_ref), covar_x_s,  ca.MX(P))])
+                                       ca.MX(Q), ca.MX(R), ca.MX(K))])
+        lf_func = ca.Function('lf', [mean_s, covar_x_s],
+                               [cost_lf(mean_s, ca.MX(mean_ref), covar_x_s,  ca.MX(P))])
+    elif costFunc is 'sat':
+        covar_u  = ca.Function('covar_u', [covar_x_s, K_s],
+                               [ca.mtimes(K_s, ca.mtimes(covar_x_s, K_s.T))])
+        l_func_x = ca.Function('lx', [mean_s, covar_x_s],
+                           [cost_saturation(mean_s - ca.MX(mean_ref), covar_x_s, ca.MX(Q))])
+        l_func_u = ca.Function('lu', [v_s, covar_x_s],
+                           [cost_saturation(v_s, covar_u(covar_x_s, ca.MX(K)), ca.MX(R))])
+        l_func = ca.Function('l', [mean_s, covar_x_s, v_s],
+                             [l_func_x(mean_s - ca.MX(mean_ref), covar_x_s) + l_func_u(v_s, covar_x_s)])
+        lf_func = ca.Function('lfx', [mean_s, covar_x_s],
+                           [cost_saturation(mean_s - ca.MX(mean_ref), covar_x_s, ca.MX(P))])
+    else:
+         raise NameError('No cost function called: ' + costFunc)
+    
     # Feedback function
     if feedback:
         u_func = ca.Function('u', [mean_s, v_s], [ca.mtimes(ca.MX(K),
                              mean_s - ca.MX(mean_ref)) + v_s])
     else:
         u_func = ca.Function('u', [mean_s, v_s], [v_s])
+
     # Create variables struct
     var = ctools.struct_symMX([(
             ctools.entry('mean', shape=(Ny,), repeat=Nt + 1),
@@ -193,6 +251,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
         conlb = np.zeros((Ny * Nt * 2,))
         conub = np.zeros((Ny * Nt * 2,))
     con = ca.vertcat(*con_mean, *con_var)
+
     # Build solver object
     nlp = dict(x=var, f=obj, g=con)
     opts = {}
@@ -214,9 +273,11 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
     for t in range(Nsim):
         solve_time = -time.time()
         mean_t = mean[t, :]
+
         if log:
             print(mean_t)
             mean_t = np.log(mean_t)
+
         # Fix initial state
         varlb['mean', 0, :] = mean_t
         varub['mean', 0, :] = mean_t
@@ -237,8 +298,6 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
         solve_time += time.time()
 
         if t == 0:
-            #var_prediction = [np.array(optvar['variance', i, :]).flatten() for i in range(Nt + 1)]
-            #mean_prediction = [np.array(optvar['mean', i, :]).flatten() for i in range(Nt + 1)]
              var_prediction = np.zeros((Nt + 1, Ny))
              mean_prediction = np.zeros((Nt + 1, Ny))
              for i in range(Nt + 1):
@@ -254,7 +313,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
 
         # Simulate the next step
         try:
-            mean[t + 1, :] = sim_system(mean[t, :], u[t, :].reshape((1, 2)),
+            mean[t + 1, :] = simulator(mean[t, :], u[t, :].reshape((1, 2)),
                                 dt, dt, noise=True)
         except RuntimeError:
             print('********************************')
@@ -265,7 +324,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
                 u = u +  1e-2 # Add jitter
             if np.any(mean < 1-1e6):
                 mean = mean +  1e-3
-            mean[t + 1, :] = sim_system(mean[t, :], u[t, :].reshape((1, 2)),
+            mean[t + 1, :] = simulator(mean[t, :], u[t, :].reshape((1, 2)),
                                 dt, dt, noise=True)
     if plot:
         x_sp = np.ones((Nsim + 1, Ny)) * x_sp

@@ -12,64 +12,16 @@ from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
 path.append(r"./GP_MPC/")
 
-import time
 import numpy as np
 import casadi as ca
-import casadi.tools as ctools
 import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
-from simulation.four_tank import sim_system
 from gp_casadi.gp_functions import gp, gp_exact_moment, gp_taylor_approx
 from gp_casadi.optimize import train_gp
-from gp_casadi.mpc import mpc, plot_mpc
-from gp_numpy.gp_functions import calc_cov_matrix
-
+from gp_casadi.mpc import mpc
+from simulation.four_tank import sim_system
 dir_data = 'data/'
 dir_parameters = 'parameters/'
-
-
-# -----------------------------------------------------------------------------
-# Preprocesing of training data
-# -----------------------------------------------------------------------------
-
-def standardize(X_original, Y_original, lb, ub):
-    # Scale input and output variables
-    X_scaled = np.zeros(X_original.shape)
-    Y_scaled = np.zeros(Y_original.shape)
-
-    # Normalize input data to [0 1]
-    for i in range(np.size(X_original, 1)):
-        X_scaled[:, i] = (X_original[:, i] - lb[i]) / (ub[i] - lb[i])
-
-    # Scale output data to a Gaussian with zero mean and unit variance
-    for i in range(np.size(Y_original, 1)):
-        Y_scaled[:, i] = (Y_original[:, i] - np.mean(Y_original[:, i])) / np.std(Y_original[:, i])
-
-    return X_scaled, Y_scaled
-
-
-def scale_min_max(X_original, lb, ub):
-    # Scale input and output variables
-    #X_scaled = np.zeros(X_original.shape)
-
-    # Normalize input data to [0 1]
-    return (X_original - lb) / (ub - lb)
-
-
-def scale_min_max_inverse(X_scaled, lb, ub):
-    # Scale input and output variables
-    # Normalize input data to [0 1]
-    return X_scaled * (ub - lb) + lb
-
-
-def scale_gaussian(X_original, meanX, stdX):
-    # Scale input and output variables
-    return (X_original - meanX) / stdX
-
-
-def scale_gaussian_inverse(X_scaled, meanX, stdX):
-    # Scale input and output variables
-    return X_scaled * stdX + meanX
 
 
 def predict_casadi(X, Y, invK, hyper, x0, u):
@@ -222,11 +174,11 @@ if __name__ == "__main__":
     xub = [28, 28, 28, 28]
 
     x0_ = x0
-    for i in range(10):
+    for i in range(1):
         x, u = mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0,
-                          sim_time=60.0, dt=dt, method='TA',
+                          sim_time=60.0, dt=dt, simulator=sim_system, method='TA',
                           ulb=ulb, uub=uub, xlb=xlb, xub=xub,
-                          meanFunc=meanFunc, log=log)
+                          meanFunc=meanFunc, log=log, costFunc='sat')
         X = np.vstack((X, np.hstack((x[1:2], u[1:]))))
         Y = np.vstack((Y, x[2:]))
         x0_ = x
@@ -235,9 +187,10 @@ if __name__ == "__main__":
         hyper, invK = train_gp(X, Y, meanFunc=meanFunc, hyper_init=hyper, log=log)
 
     x, u= mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0,
-          sim_time=600.0, dt=dt, method='TA',
+          sim_time=150.0, dt=dt, simulator=sim_system, method='TA',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, plot=True,
-          meanFunc=meanFunc, terminal_constraint=1e-1, log=log)
+          meanFunc=meanFunc, terminal_constraint=None, log=log,
+          costFunc='sat')
     
     #mean, u_mpc = mpc(X, Y, invK, hyper, method='ME')
     #mu, var  = predict_casadi(X, Y, invK, hyper, x0, u_mpc)

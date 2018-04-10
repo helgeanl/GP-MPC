@@ -9,7 +9,6 @@ from __future__ import print_function
 
 from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\Software\coinhsl-win32-openblas-2014")
 
 import time
 import pyDOE
@@ -141,7 +140,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, log=False, multistart=1):
 
     # NLP solver options
     opts = {}
-    opts['expand']              = True
+    opts['expand']              = False
     opts['print_time']          = False
     opts['verbose']             = False
     opts['ipopt.print_level']   = 0
@@ -228,3 +227,47 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, log=False, multistart=1):
     print('----------------------------------------')
 
     return hyp_opt, invK
+
+
+# -----------------------------------------------------------------------------
+# Preprocesing of training data
+# -----------------------------------------------------------------------------
+
+def standardize(X_original, Y_original, lb, ub):
+    # Scale input and output variables
+    X_scaled = np.zeros(X_original.shape)
+    Y_scaled = np.zeros(Y_original.shape)
+
+    # Normalize input data to [0 1]
+    for i in range(np.size(X_original, 1)):
+        X_scaled[:, i] = (X_original[:, i] - lb[i]) / (ub[i] - lb[i])
+
+    # Scale output data to a Gaussian with zero mean and unit variance
+    for i in range(np.size(Y_original, 1)):
+        Y_scaled[:, i] = (Y_original[:, i] - np.mean(Y_original[:, i])) / np.std(Y_original[:, i])
+
+    return X_scaled, Y_scaled
+
+
+def scale_min_max(X_original, lb, ub):
+    # Scale input and output variables
+    #X_scaled = np.zeros(X_original.shape)
+
+    # Normalize input data to [0 1]
+    return (X_original - lb) / (ub - lb)
+
+
+def scale_min_max_inverse(X_scaled, lb, ub):
+    # Scale input and output variables
+    # Normalize input data to [0 1]
+    return X_scaled * (ub - lb) + lb
+
+
+def scale_gaussian(X_original, meanX, stdX):
+    # Scale input and output variables
+    return (X_original - meanX) / stdX
+
+
+def scale_gaussian_inverse(X_scaled, meanX, stdX):
+    # Scale input and output variables
+    return X_scaled * stdX + meanX
