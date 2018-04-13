@@ -56,8 +56,10 @@ def integrate_system(ndstate, nastate, u, t0, tf, x0):
     xDi = x0
 
     ode = ca.vertcat(
-        -a1 / A1 * ca.sqrt(2 * g * xd[0]) + a3 / A1 * ca.sqrt(2 * g * xd[2]) + gamma1 / A1 * u[0],
-        -a2 / A2 * ca.sqrt(2 * g * xd[1]) + a4 / A2 * ca.sqrt(2 * g * xd[3]) + gamma2 / A2 * u[1],
+        -a1 / A1 * ca.sqrt(2 * g * xd[0]) + a3 / A1 
+        * ca.sqrt(2 * g * xd[2]) + gamma1 / A1 * u[0],
+        -a2 / A2 * ca.sqrt(2 * g * xd[1]) + a4 / A2 
+        * ca.sqrt(2 * g * xd[3]) + gamma2 / A2 * u[1],
         -a3 / A3 * ca.sqrt(2 * g * xd[2]) + (1 - gamma2) / A3 * u[1],
         -a4 / A4 * ca.sqrt(2 * g * xd[3]) + (1 - gamma1) / A4 * u[0])
 
@@ -128,7 +130,7 @@ def generate_training_data():
 
     # Create state input design using a latin hypecube
     # Latin hypercube design for unit cube [0,1]^ndstate
-    X_mat = pyDOE.lhs(ndstate, samples=npoints)
+    X_mat = pyDOE.lhs(ndstate, samples=npoints, criterion='maximin')
 
     # Scale state inputs to correct range
     for k in range(npoints):

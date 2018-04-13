@@ -391,10 +391,10 @@ def plot_mpc(x, u, dt, x_pred=None, var_pred=None, x_sp=None, title=None,
         if x_pred is not None:
             ax.errorbar(t_horizon, x_pred[:, i], yerr=2 * np.sqrt(var_pred[:, i]),
                         linestyle='None', marker='.', color='r', label='1st prediction')
-        #plt.plot(t2, mean_prediction[:, i], 'r.', label='1st prediction')
-        #plt.gca().fill_between(t2.flat, mean_prediction[:, i] -
-        #       2 * np.sqrt(var_prediction[:, i]), mean_prediction[:, i] +
-        #       2 * np.sqrt(var_prediction[:, i]), color="#bbbbbb", label='95% conf prediction')
+            plt.plot(t_horizon, x_pred[:, i], 'r.', label='1st prediction')
+            plt.gca().fill_between(t_horizon.flat, x_pred[:, i] -
+                   2 * np.sqrt(var_pred[:, i]), x_pred[:, i] +
+                   2 * np.sqrt(var_pred[:, i]), color="#bbbbbb", label='95% conf 1st prediction')
         plt.legend(loc='best')
         ax.set_ylabel(xnames[i])
         ax.set_xlabel('Time [' + time_unit + ']')
