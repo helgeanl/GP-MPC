@@ -1,0 +1,4 @@
+# Ignore all contents in this folder except this file
+*
+*/
+!.gitignore
