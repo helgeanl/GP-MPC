@@ -61,22 +61,26 @@ def get_mean_function(hyper, X, func='zero'):
     return ca.Function('mean', [Z_s], [meanF(Z_s, hyper)])
 
 
-def gp(invK, X, Y, hyper, z,  meanFunc='zero'):
+def gp(invK, X, Y, hyper, inputmean,  meanFunc='zero', log=False):
     """ Gaussian Process
 
     # Arguments
         invK: Array with the inverse covariance matrices of size (Ny x N x N),
             with Ny number of outputs from the GP and N number of training points.
-        X: Training data matrix with inputs of size NxNx, with Nx number of
+        X: Training data matrix with inputs of size (N x Nx), with Nx number of
             inputs to the GP.
         Y: Training data matrix with outpyts of size (N x Ny).
         hyper: Array with hyperparameters [ell_1 .. ell_Nx sf sn].
-        z: Input to the GP of size 1xD
+        inputmean: Input to the GP of size (1 x Nx)
 
     # Returns
         mean: The estimated mean.
         var: The estimated variance
     """
+    if log:
+        X = ca.log(X)
+        Y = ca.log(Y)
+        inputmean = ca.log(inputmean)
 
     Ny = len(invK)
     N, Nx = ca.MX.size(X)
@@ -93,25 +97,28 @@ def gp(invK, X, Y, hyper, z,  meanFunc='zero'):
                           [covSEard(x_s, z_s, ell_s, sf2_s)])
 
     for output in range(Ny):
-        m = get_mean_function(hyper[output, :], z, func=meanFunc)
+        m = get_mean_function(hyper[output, :], inputmean, func=meanFunc)
         ell = ca.MX(hyper[output, 0:Nx])
         sf2 = ca.MX(hyper[output, Nx]**2)
 
-        kss = covSE(z, z, ell, sf2)
+        kss = covSE(inputmean, inputmean, ell, sf2)
         ks = ca.MX.zeros(N, 1)
         for i in range(N):
-            ks[i] = covSE(X[i, :], z, ell, sf2)
+            ks[i] = covSE(X[i, :], inputmean, ell, sf2)
 
         ksK = ca.mtimes(ks.T, invK[output])
 
-        mean[output] = ca.mtimes(ksK, Y[:, output] - m(z)) + m(z)
+        mean[output] = ca.mtimes(ksK, Y[:, output] - m(inputmean)) + m(inputmean)
         var[output] = kss - ca.mtimes(ksK, ks)
-
+    
+    if log:
+        mean = ca.exp(mean)
+        var = ca.exp(var)
     return mean, var
 
 
 def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar,
-                     meanFunc='zero', diag=False):
+                     meanFunc='zero', diag=False, log=False):
     """ Gaussian Process with Taylor Approximation
 
     This uses a first order taylor for the mean evaluation (a normal GP mean),
@@ -132,23 +139,28 @@ def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar,
         covariance: The estimated covariance matrix with the output variance in the
                     diagonal of size (Ny x Ny).
     """
-    Ny     = len(invK)
-    N, Nx     = ca.MX.size(X)
-    mean  = ca.MX.zeros(Ny, 1)
-    var = ca.MX.zeros(Nx, 1)
-    v     = X - ca.repmat(inputmean, N, 1)
-    covar = ca.MX.zeros(Ny, Ny)
-    variance = ca.MX.zeros(Ny)
+    if log:
+        X = ca.log(X)
+        Y = ca.log(Y)
+        inputmean = ca.log(inputmean)
+
+    Ny         = len(invK)
+    N, Nx      = ca.MX.size(X)
+    mean       = ca.MX.zeros(Ny, 1)
+    var        = ca.MX.zeros(Nx, 1)
+    v          = X - ca.repmat(inputmean, N, 1)
+    covar      = ca.MX.zeros(Ny, Ny)
+    variance   = ca.MX.zeros(Ny)
     covariance = ca.MX.zeros(Ny, Ny)
-    d_mean = ca.MX.zeros(Ny, 1)
-    dd_var = ca.MX.zeros(Ny, Ny)
+    d_mean     = ca.MX.zeros(Ny, 1)
+    dd_var     = ca.MX.zeros(Ny, Ny)
 
     # Casadi symbols
-    x_s = ca.SX.sym('x', Nx)
-    z_s = ca.SX.sym('z', Nx)
-    ell_s = ca.SX.sym('ell', Nx)
-    sf2_s = ca.SX.sym('sf2')
-    covSE = ca.Function('covSE', [x_s, z_s, ell_s, sf2_s],
+    x_s     = ca.SX.sym('x', Nx)
+    z_s     = ca.SX.sym('z', Nx)
+    ell_s   = ca.SX.sym('ell', Nx)
+    sf2_s   = ca.SX.sym('sf2')
+    covSE   = ca.Function('covSE', [x_s, z_s, ell_s, sf2_s],
                           [covSEard(x_s, z_s, ell_s, sf2_s)])
 
     for a in range(Ny):
@@ -185,6 +197,10 @@ def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar,
         else:
             covariance[a, a] = var[a] + ca.trace(ca.mtimes(covar, .5 * dd_var + covar1))
 
+    if log:
+        mean = ca.exp(mean)
+        variance = ca.exp(variance)
+        
     if diag:
         return [mean, variance]
     else:

@@ -82,7 +82,7 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
     return NLL(Y - m(X), alpha, log_detK)
 
 
-def train_gp(X, Y, meanFunc='zero', hyper_init=None, log=False, multistart=1):
+def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False, multistart=1):
     """ Train hyperparameters
 
     Maximum likelihood estimation is used to optimize the hyperparameters of
@@ -140,18 +140,23 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, log=False, multistart=1):
 
     # NLP solver options
     opts = {}
-    opts['expand']              = False
+    opts['expand']              = True
     opts['print_time']          = False
     opts['verbose']             = False
     opts['ipopt.print_level']   = 0
     opts['ipopt.linear_solver'] = 'ma27'
-    opts['ipopt.max_cpu_time'] = 1
+    opts['ipopt.max_cpu_time']  = 4
     #opts["ipopt.max_iter"]     = 100
     #opts["ipopt.tol"]          = 1e-12
     #opts["ipopt.hessian_approximation"] = "limited-memory"
+    warm_start = False
+    if hyper_init is not None:
+        opts['ipopt.warm_start_init_point'] = 'yes'
+        warm_start = True
     Solver = ca.nlpsol('Solver', 'ipopt', nlp, opts)
-
+    
     hyp_opt = np.zeros((Ny, num_hyp))
+    lam_x_opt = np.zeros((Ny, num_hyp))
     invK = np.zeros((Ny, N, N))
     print('\n----------------------------------------')
     for output in range(Ny):
@@ -192,19 +197,25 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, log=False, multistart=1):
 
         obj = np.zeros((multistart, 1))
         hyp_opt_loc = np.zeros((multistart, num_hyp))
+        lam_x_opt_loc = np.zeros((multistart, num_hyp))
 
         for i in range(multistart):
             solve_time = -time.time()
-            res = res = Solver(x0=hyp_init, lbx=lb, ubx=ub, p=param)
+            if warm_start:
+                res = res = Solver(x0=hyp_init, lam_x0=lam_x0[output],
+                                   lbx=lb, ubx=ub, p=param)
+            else:
+                res = res = Solver(x0=hyp_init, lbx=lb, ubx=ub, p=param)
             status = Solver.stats()['return_status']
-            obj[i] = res['f']
-            hyp_opt_loc[i, :] = res['x']
-            hyp_init = res['x']
+            obj[i]              = res['f']
+            hyp_opt_loc[i, :]   = res['x']
+            lam_x_opt_loc       = res['lam_x']
             solve_time += time.time()
-            print("\t%d: %s - %f s" % (i, status, solve_time))
+            print("\t%s - %f s" % (status, solve_time))
 
         # With multistart, get solution with lowest decision function value
-        hyp_opt[output, :] = hyp_opt_loc[np.argmin(obj)]
+        hyp_opt[output, :]   = hyp_opt_loc[np.argmin(obj)]
+        lam_x_opt[output, :] = lam_x_opt_loc[np.argmin(obj)]
         ell = hyp_opt[output, :Nx]
         sf2 = hyp_opt[output, Nx]**2
         sn2 = hyp_opt[output, Nx + 1]**2
@@ -223,10 +234,14 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, log=False, multistart=1):
             K = K + np.eye(N) * 1e-8
             L = np.linalg.cholesky(K)
         invL = np.linalg.solve(L, np.eye(N))
-        invK[output, :, :] = np.linalg.solve(L.T, invL)    # np.linalg.inv(K)
+        invK[output, :, :] = np.linalg.solve(L.T, invL)
     print('----------------------------------------')
 
-    return hyp_opt, invK
+    opt = {}
+    opt['hyper'] = hyp_opt
+    opt['lam_x'] = lam_x_opt
+    opt['invK'] = invK
+    return opt
 
 
 # -----------------------------------------------------------------------------

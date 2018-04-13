@@ -153,19 +153,21 @@ if __name__ == "__main__":
     N, Nx = X.shape  # Number of sampling points and inputs
     Ny = Y.shape[1]  # Number of outputs
     if optimize:
-        hyper, invK = train_gp(X, Y, meanFunc=meanFunc, log=log)
+        opt = train_gp(X, Y, meanFunc=meanFunc, log=log)
+        hyper = opt['hyper']
+        invK  = opt['invK']
+        lam_x = opt['lam_x']
         for i in range(Ny):
             np.savetxt(dir_parameters + 'invK' + str(i + 1), invK[i, :, :], delimiter=',')
         np.savetxt(dir_parameters + 'hyper_opt', hyper, delimiter=',')
     else:
         hyper = np.loadtxt(dir_parameters + 'hyper_opt', delimiter=',')
-
         invK = np.zeros((Ny, N, N))
         for i in range(Ny):
             invK[i, :, :] = np.loadtxt(dir_parameters + 'invK' + str(i + 1), delimiter=',')
 
     eps = 1e-3
-    dt = 30
+    dt = 10
     x0 = np.array([8., 10., 8., 18.])
     x_sp = np.array([14., 14., 14.2, 21.3])
     ulb = [eps, eps]
@@ -174,23 +176,26 @@ if __name__ == "__main__":
     xub = [28, 28, 28, 28]
 
     x0_ = x0
-    for i in range(1):
+    for i in range(0):
         x, u = mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0,
                           sim_time=60.0, dt=dt, simulator=sim_system, method='TA',
                           ulb=ulb, uub=uub, xlb=xlb, xub=xub,
-                          meanFunc=meanFunc, log=log, costFunc='sat')
+                          meanFunc=meanFunc, log=log, costFunc='quad', plot=False)
         X = np.vstack((X, np.hstack((x[1:2], u[1:]))))
         Y = np.vstack((Y, x[2:]))
         x0_ = x
 
         # Train again
-        hyper, invK = train_gp(X, Y, meanFunc=meanFunc, hyper_init=hyper, log=log)
+        opt = train_gp(X, Y, meanFunc=meanFunc, hyper_init=hyper, lam_x0=lam_x, log=log)
+        hyper = opt['hyper']
+        invK  = opt['invK']
+        lam_x = opt['lam_x']
 
     x, u= mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0,
-          sim_time=150.0, dt=dt, simulator=sim_system, method='TA',
+          sim_time=200.0, dt=dt, simulator=sim_system, method='TA',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, plot=True,
           meanFunc=meanFunc, terminal_constraint=None, log=log,
-          costFunc='sat')
+          costFunc='quad')
     
     #mean, u_mpc = mpc(X, Y, invK, hyper, method='ME')
     #mu, var  = predict_casadi(X, Y, invK, hyper, x0, u_mpc)

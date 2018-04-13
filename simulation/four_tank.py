@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 ndstate = 4                             # Number of states
 nastate = 0                             # Number of algebraic equations
 ninput  = 2                             # Number of inputs
-dt      = 30                            # Time of one control interval 3s
+dt      = 10                            # Time of one control interval 3s
 
 training = True                         # True: generate training data
 optimize = False                        # Optimize hyperperameters
@@ -26,7 +26,7 @@ simTime = 300                           # Simulation time in seconds
 
 
 # Regression data
-npoints = 20                          # Number of data points generated
+npoints = 10                          # Number of data points generated
 u_min = np.array([0., 0.])             # lower bound of control inputs [ml/s]
 u_max = np.array([60., 60.])           # upper bound of control inputs [ml/s]
 x_min = np.array([0., 0., 0., 0.])     # lower bound of expected minimum state [cm]
@@ -82,13 +82,11 @@ def integrate_system(ndstate, nastate, u, t0, tf, x0):
 def sim_system(x0, u, simTime, dt, noise=False):
     simPoints = int(simTime / dt)
     # Predefine matrix to collect control inputs
-    #u = np.exp(u)
     u_matrix = u
     
     # Initial state of the system
-    #x0 = np.exp(x0)
     x = x0
-    #x = np.array([60,0,12,60.1])
+
     # Predefine matrix to collect noisy state outputs
     Y_sim = np.zeros((simPoints, ndstate))
 
@@ -96,7 +94,7 @@ def sim_system(x0, u, simTime, dt, noise=False):
         t0i = 0.                 # start time of integrator
         tfi = dt                 # end time of integrator
         u_s = u_matrix[t, :]    # control input for simulation
-        #u_s = np.array([6.e+2, 1.e-2])
+
         # simulate system
         x = integrate_system(ndstate, nastate, u_s, t0i, tfi, x)[:, 0]
 
@@ -105,7 +103,10 @@ def sim_system(x0, u, simTime, dt, noise=False):
             Y_sim[t, :] = x + np.random.multivariate_normal(np.zeros((ndstate)), R)
         else:
             Y_sim[t, :] = x
-        #Y_sim = np.log(Y_sim)
+        # Limit values to above 1e-8 to avvoid to avvoid numerical errors
+        if np.any(Y_sim < 0):
+            print('Negative values!')
+            Y_sim = Y_sim.clip(min=1e-8)
     return Y_sim
 
 
