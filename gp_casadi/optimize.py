@@ -102,7 +102,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False, mul
     # Return:
         hyp_pot: Array with the optimal hyperparameters [ell_1 .. ell_Nx sf sn].
     """
-
+    build_solver_time = -time.time()
     if log:
         X = np.log(X)
         Y = np.log(Y)
@@ -143,7 +143,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False, mul
     opts['expand']              = True
     opts['print_time']          = False
     opts['verbose']             = False
-    opts['ipopt.print_level']   = 0
+    opts['ipopt.print_level']   = 1
     opts['ipopt.linear_solver'] = 'ma27'
     opts['ipopt.max_cpu_time']  = 4
     #opts["ipopt.max_iter"]     = 100
@@ -158,7 +158,11 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False, mul
     hyp_opt = np.zeros((Ny, num_hyp))
     lam_x_opt = np.zeros((Ny, num_hyp))
     invK = np.zeros((Ny, N, N))
-    print('\n----------------------------------------')
+    
+    build_solver_time += time.time()
+    print('\n________________________________________')
+    print('# Time to build optimizer: %f sec' % build_solver_time)
+    print('----------------------------------------')
     for output in range(Ny):
         print('Optimizing hyperparameters for state %d:' % output)
         stdX      = np.std(X)

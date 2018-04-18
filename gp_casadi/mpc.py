@@ -10,6 +10,7 @@ from __future__ import print_function
 from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
 import time
+import scipy
 import numpy as np
 import matplotlib.pyplot as plt
 import casadi as ca
@@ -32,31 +33,6 @@ def cost_lf(x, x_ref, covar_x, P, s=1):
     return sqnorm_x(x - x_ref, P) + trace_x(P, covar_x)
 
 
-def cost_saturation(z, covar_z, M):
-    """ Cost function: Expected Value of Saturating Cost
-    """
-    M_s = ca.SX.sym('M', ca.MX.size(M))
-    z_s = ca.SX.sym('z', ca.MX.size(z))
-    Nz = ca.MX.size1(covar_z)
-    covar_z_s = ca.SX.sym('covar_z', Nz, Nz)
-    
-    I = ca.SX.eye(Nz)
-    #R = I + 2 * covar_z_s @ M_s
-    #R = ca.SX.eye(Nz) + 2 * ca.mtimes(covar_z_s, M_s)
-    #invR = ca.inv(R)
-    #S = ca.Function('S', [covar_z_s, M_s], [ca.solve(R.T, M_s.T).T])
-    #S = ca.Function('S', [covar_z_s, M_s], [ca.mtimes(M_s, invR)])
-    S = ca.Function('S', [covar_z_s, M_s], 
-                    [M_s @ ca.inv(I + 2 * covar_z_s @ M_s)])
-    #sqnorm_z = ca.Function('sqnorm_z', [z_s, covar_z_s, M_s],
-    #                       [ca.mtimes(z_s.T, ca.mtimes(S(covar_z_s, M_s), z_s))])
-    sqnorm_z = ca.Function('sqnorm_z', [z_s, M_s],
-                           [z_s.T @ M_s @ z_s])
-    detR = ca.Function('detR', [covar_z_s, M_s], 
-                       [ca.det(I + 2 * covar_z_s @ M_s)])
-
-    return 1-  ca.exp(-sqnorm_z(z, S(covar_z, M)))
-
 
 def cost_saturation_lf(x, x_ref, covar_x, P):
     """ Terminal Cost function: Expected Value of Saturating Cost
@@ -67,8 +43,8 @@ def cost_saturation_lf(x, x_ref, covar_x, P):
     P_s = ca.SX.sym('P', Nx, Nx)
     x_s = ca.SX.sym('x', Nx)
     covar_x_s = ca.SX.sym('covar_z', Nx, Nx)
-    
-    Z_x = ca.SX.eye(Nx) + 2 * covar_x_s @ P_s
+
+    Z_x = ca.SX.eye(Nx) #+ 2 * covar_x_s @ P_s 
     cost_x = ca.Function('cost_x', [x_s, P_s, covar_x_s], 
                        [1 - ca.exp(-(x_s.T @ ca.solve(Z_x.T, P_s.T).T @ x_s)) 
                                / ca.sqrt(ca.det(Z_x))])
@@ -93,9 +69,8 @@ def cost_saturation_l(x, x_ref, covar_x, u, Q, R, K):
     covar_u  = ca.Function('covar_u', [covar_x_s, K_s],
                            [K_s @ covar_x_s @ K_s.T])
 
-
-    Z_x = ca.SX.eye(Nx) + 2 * covar_x_s @ Q_s
-    Z_u = ca.SX.eye(Nu) + 2 * covar_u_s @ R_s
+    Z_x = ca.SX.eye(Nx) + 2 * covar_x_s @ Q_s 
+    Z_u = ca.SX.eye(Nu) + 2 * covar_u_s @ R_s 
     
     cost_x = ca.Function('cost_x', [x_s, Q_s, covar_x_s], 
                        [1 - ca.exp(-(x_s.T @ ca.solve(Z_x.T, Q_s.T).T @ x_s)) 
@@ -133,9 +108,25 @@ def cost_l(x, x_ref, covar_x, u, Q, R, K, s=1):
                  + trace_u(R, covar_u(covar_x, K))
 
 
+def constraint(mean, covar, H, quantile):
+    r = ca.SX.sym('r')
+    mean_s = ca.SX.sym('mean', ca.MX.size(mean))
+    covar_s = ca.SX.sym('r', ca.MX.size(covar))
+    H_s = ca.SX.sym('H', 1, ca.MX.size2(H))
+    
+    con_func = ca.Function('con', [mean_s, covar_s, H_s, r], 
+                           [H_s @ mean_s + r * ca.sqrt(H_s @ covar_s @ H_s.T)])
+    con = []
+    r = quantile
+
+    for i in range(ca.MX.size1(mean)):
+        con.append(con_func(mean, covar, H[i, :], quantile[i]))
+    return con
+
+
 def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
         ulb=None, uub=None, xlb=None, xub=None, terminal_constraint=None,
-        feedback=False, method='TA', log=False, meanFunc='zero', 
+        feedback=True, method='TA', log=False, meanFunc='zero', 
         costFunc='quad', plot=False):
     """ Model Predictive Control
 
@@ -148,13 +139,13 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
         hyper: Array with hyperparameters [ell_1 .. ell_Nx sf sn].
         method: Method of propagating the uncertainty
             Possible options:
-                'TA': Second order taylor approximation
-                'ME': Mean equivalent approximation without propagation
+                'TA': Second order Taylor approximation
+                'ME': Mean equivalent approximation
     # Returns:
         mean: Simulated output
         u: Control inputs
     """
-
+    build_solver_time = -time.time()
     Nsim = int(sim_time / dt)
 
     Nt = int(horizon / dt)
@@ -162,7 +153,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     Nx = X.shape[1]
     Nu = Nx - Ny
 
-    P = np.eye(Ny) * 10
+    P = np.eye(Ny) * 1
 #    P = np.array([[6, .0, .0, .0],
 #                  [.0, 6, .0, .0],
 #                  [.0, .0, 6, .0],
@@ -171,20 +162,27 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
 #                  [.0, 6, .0, .0],
 #                  [.0, .0, 6, .0],
 #                  [.0, .0, .0, 31]])
-    Q = np.eye(Ny) * 10
-    R = np.eye(Nu) * 0.01
-    K = np.ones((Nu, Ny)) * 0.001
+    Q = np.eye(Ny) * 1
+    R = np.eye(Nu) * 0.001
+    
+    percentile = 0.95
+    quantile_x = np.ones(Ny) * scipy.stats.norm.ppf(percentile)
+    quantile_u = np.ones(Nu) * scipy.stats.norm.ppf(percentile)
+    H_x = ca.MX.eye(Ny)
+    H_u = ca.MX.eye(Nu)
+    #K = np.ones((Nu, Ny)) * 0.001
 
     # Initial state
     mean_0 = x0
     mean_ref = x_sp
   
-    variance_0 = np.ones(Ny) * 1e-5 * np.std(Y)
+    variance_0 = np.ones(Ny) * 1e-3
 
     mean_s = ca.MX.sym('mean', Ny)
     variance_s = ca.MX.sym('var', Ny)
     covar_x_s = ca.MX.sym('covar', Ny, Ny)
     v_s = ca.MX.sym('v', Nu)
+    u_s = ca.MX.sym('u', Nu)
     z_s = ca.vertcat(mean_s, v_s)
     K_s = ca.MX.sym('K', Nu, Ny)
 
@@ -202,92 +200,123 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
 
     # Define stage cost and terminal cost
     if costFunc is 'quad':
-        l_func = ca.Function('l', [mean_s, covar_x_s, v_s],
-                           [cost_l(mean_s, ca.MX(mean_ref), covar_x_s, v_s,
-                                       ca.MX(Q), ca.MX(R), ca.MX(K))])
+        l_func = ca.Function('l', [mean_s, covar_x_s, u_s, K_s],
+                           [cost_l(mean_s, ca.MX(mean_ref), covar_x_s, u_s,
+                                       ca.MX(Q), ca.MX(R), K_s)])
         lf_func = ca.Function('lf', [mean_s, covar_x_s],
                                [cost_lf(mean_s, ca.MX(mean_ref), covar_x_s,  ca.MX(P))])
     elif costFunc is 'sat':
-        
-        l_func = ca.Function('l', [mean_s, covar_x_s, v_s],
-                           [cost_saturation(mean_s - ca.MX(mean_ref), covar_x_s, ca.MX(Q))])
+        l_func = ca.Function('l', [mean_s, covar_x_s, u_s, K_s],
+                           [cost_saturation_l(mean_s, ca.MX(mean_ref), covar_x_s, u_s,
+                                       ca.MX(Q), ca.MX(R), K_s)])
         lf_func = ca.Function('lf', [mean_s, covar_x_s],
-                               [cost_saturation(mean_s - ca.MX(mean_ref), covar_x_s, ca.MX(P))])
-#        l_func = ca.Function('l', [mean_s, covar_x_s, v_s],
-#                           [cost_saturation_l(mean_s, ca.MX(mean_ref), covar_x_s, v_s,
-#                                       ca.MX(Q), ca.MX(R), ca.MX(K))])
-#        lf_func = ca.Function('lf', [mean_s, covar_x_s],
-#                               [cost_saturation_lf(mean_s, ca.MX(mean_ref), covar_x_s,  ca.MX(P))])
+                               [cost_saturation_lf(mean_s, ca.MX(mean_ref), covar_x_s,  ca.MX(P))])
     else:
          raise NameError('No cost function called: ' + costFunc)
     
     # Feedback function
     if feedback:
-        u_func = ca.Function('u', [mean_s, v_s], [ca.mtimes(ca.MX(K),
-                             mean_s - ca.MX(mean_ref)) + v_s])
+        u_func = ca.Function('u', [mean_s, v_s, K_s], [ca.mtimes(K_s,
+                             mean_s) + v_s])
     else:
-        u_func = ca.Function('u', [mean_s, v_s], [v_s])
+        u_func = ca.Function('u', [mean_s, v_s, K_s], [v_s])
+    
+    covar_u  = ca.Function('covar_u', [covar_x_s, K_s],
+                       [K_s @ covar_x_s @ K_s.T])
 
     # Create variables struct
     var = ctools.struct_symMX([(
             ctools.entry('mean', shape=(Ny,), repeat=Nt + 1),
             ctools.entry('variance', shape=(Ny,), repeat=Nt + 1),
-            ctools.entry('v', shape=(Nu,), repeat=Nt)
+            #ctools.entry('variance_u', shape=(Nu,), repeat=Nt + 1),
+            ctools.entry('v', shape=(Nu,), repeat=Nt),
+            ctools.entry('K', shape=(Nu*Ny,)),
     )])
+    num_var = var.size
 
     varlb = var(-np.inf)
     varub = var(np.inf)
     varguess = var(0)
-
-    # Adjust the relevant constraints
+    
+    # Adjust boundries
     for t in range(Nt):
-        varlb['variance', t, :] = np.zeros(Ny)
-        if ulb is not None:
-            varlb['v', t, :] = ulb
-            if feedback:
-                varlb['v', t, :] = ulb - np.dot(K, xub)
-        if uub is not None:
-            varub['v', t, :] = uub
-            if feedback:
-                varub['v', t, :] = uub - np.dot(K, xlb)
-        if xlb is not None:
-            varlb['mean', t, :] = xlb
-        if xub is not None:
-            varub['mean', t, :] = xub
+        varlb['variance', t, :] = np.ones(Ny) * 1e-6
+        #varlb['variance_u', t, :] = np.ones(Nu) * 1e-8
+        varlb['K', :] = np.ones(Nu * Ny) * 1e-8
 
     # Now build up constraints and objective
     obj = ca.MX(0)
-    con_mean = []
-    con_var = []
+    con_g = []
+    con_state = []
+    con_state_lb    = [] #np.fill((2 * Nt,), -np.inf) #np.tile(xlb, Nt)
+    con_state_ub    = [] #np.fill((2 * Nt,), np.inf) #np.tile(xub, Nt)
+    con_input = []
+    con_input_lb    = [] # np.tile(ulb, Nt)
+    con_input_ub    =  [] #np.tile(uub, Nt)
+
     for t in range(Nt):
-        u_i = u_func(var['mean', t], var['v', t])
-        z = ca.vertcat(var['mean', t], u_i)
-        mean_i, var_i = gp_func(z, var['variance', t])
+        K_t = var['K'].reshape((Nu, Ny))
+        u_t = u_func(var['mean', t], var['v', t], K_t)
+        z = ca.vertcat(var['mean', t], u_t)
+        covar_x_t = ca.diag(var['variance', t])
+        #covar_u_t = covar_u(covar_x_t, K_t)
+        
+        mean_next, var_next = gp_func(z, var['variance', t])
+        covar_u_next = covar_u(ca.diag(var_next), K_t)
+        var_u_next = ca.diag(covar_u_next)
+        
+        con_g.append(var['mean', t + 1] - mean_next)
+        con_g.append(var['variance', t + 1] - var_next)
+        #con_g.append(var['variance_u', t + 1] - var_u_next)
+        
+#        con_state.extend(constraint(mean_next, covar_x_next, H_x, quantile_x))
+#        con_input.extend(constraint(u_t, covar_u_next, H_u, quantile_u))
 
-        con_mean.append(var['mean', t + 1] - mean_i)
-        con_var.append(var['variance', t + 1] - var_i)
+        con_state.append(mean_next + quantile_x * ca.sqrt(var_next) )
+        con_state_ub.append(xub)
+        con_state_lb.append(np.full((Ny,), -np.inf))
 
-        obj += l_func(var['mean', t], ca.diag(var['variance', t]), u_i)
+        con_state.append(mean_next - quantile_x * ca.sqrt(var_next))
+        con_state_ub.append(np.full((Ny,), np.inf))
+        con_state_lb.append(xlb)
+
+        con_input.append(u_t + quantile_u * ca.sqrt(var_u_next))
+        con_input_ub.extend(uub)
+        con_input_lb.append(np.full((Nu,), -np.inf))
+        
+        con_input.append(u_t - quantile_u * ca.sqrt(var_u_next))
+        con_input_ub.append(np.full((Nu,), np.inf))
+        con_input_lb.append(ulb)
+        
+        obj += l_func(var['mean', t], covar_x_t, u_t, K_t)
     obj += lf_func(var['mean', Nt], ca.diag(var['variance', Nt]))
-
+    
     if terminal_constraint is not None:
-        con_mean.append(var['mean', Nt] - mean_ref)
-        conlb = np.zeros((Ny * Nt * 2 + Ny,))
-        conub = np.zeros((Ny * Nt * 2 + Ny,))
-        conlb[Ny * t] = - terminal_constraint
-        conub[Ny * t] = terminal_constraint
+        con_g.append(var['mean', Nt] - mean_ref)
+        con_g_lb = np.zeros((Ny * Nt * 2  + Ny,))
+        con_g_ub = np.zeros((Ny * Nt * 2  + Ny,))
+#        con_g_lb = np.zeros((Ny * Nt * 2  + Nu * Nt + Ny,))
+#        con_g_ub = np.zeros((Ny * Nt * 2  + Nu * Nt + Ny,))
+        con_g_lb.append(- terminal_constraint)
+        con_g_ub.append(terminal_constraint)
     else:
-        conlb = np.zeros((Ny * Nt * 2,))
-        conub = np.zeros((Ny * Nt * 2,))
-    con = ca.vertcat(*con_mean, *con_var)
-
+        con_g_lb = np.zeros((Ny * Nt * 2 ,))
+        con_g_ub = np.zeros((Ny * Nt * 2 ,))
+#        con_g_lb = np.zeros((Ny * Nt * 2 + Nu * Nt,))
+#        con_g_ub = np.zeros((Ny * Nt * 2 + Nu * Nt,))
+    con = ca.vertcat(*con_g, *con_state, *con_input)
+    conlb = ca.vertcat(*con_g_lb, *con_state_lb, *con_input_lb)
+    conub = ca.vertcat(*con_g_ub, *con_state_ub, *con_input_ub)
+    
     # Build solver object
     nlp = dict(x=var, f=obj, g=con)
     opts = {}
     opts['ipopt.print_level'] = 0
     opts['ipopt.linear_solver'] = 'ma27'
-    opts['ipopt.max_cpu_time'] = 4
+    opts['ipopt.max_cpu_time'] = 1
+    opts['ipopt.warm_start_init_point'] = 'no'
     opts['print_time'] = False
+    opts['verbose'] = False
     opts['expand'] = True
     solver = ca.nlpsol('solver', 'ipopt', nlp, opts)
 
@@ -297,7 +326,17 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     variance = np.zeros((Nsim + 1, Ny))
     variance[0, :] = variance_0
     u = np.zeros((Nsim, Nu))
+    u[0,:] = np.array(ulb) + 10
+    #K = np.ones((Nu, Ny)) * 1e-3
+    
+    # Warm start each round
+    lam_x0 = np.zeros(num_var)
+    lam_g0 = 0
 
+    build_solver_time += time.time()
+    print('\n________________________________________')
+    print('# Time to build mpc solver: %f sec' % build_solver_time)
+    print('----------------------------------------')
     print('\nSolving MPC with %d step horizon' % Nt)
     for t in range(Nsim):
         solve_time = -time.time()
@@ -305,20 +344,28 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
         # Fix initial state
         varlb['mean', 0, :] = mean[t, :]
         varub['mean', 0, :] = mean[t, :]
-        varguess['mean', 0, :] = mean[t, :]
         varlb['variance', 0, :] = variance[t, :]
         varub['variance', 0, :] = variance[t, :]
+
+        varguess['mean', 0, :] = mean[t, :]
         varguess['variance', 0, :] = variance[t, :]
+#        varguess['variance_u', 0, :] = np.ones(Nu) * 1e-6
+#        varguess['v', 0, :] = u[t, :] - np.dot(K, mean[t, :])
+
         args = dict(x0=varguess,
                     lbx=varlb,
                     ubx=varub,
                     lbg=conlb,
-                    ubg=conub)
+                    ubg=conub,
+                    lam_x0=lam_x0,
+                    lam_g0=lam_g0)
 
         # Solve nlp
         sol = solver(**args)
         status = solver.stats()['return_status']
         optvar = var(sol['x'])
+        lam_x0 = sol['lam_x']
+        lam_g0 = sol['lam_g']
         solve_time += time.time()
 
         if t == 0:
@@ -329,13 +376,17 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
                  mean_prediction[i, :] = np.array(optvar['mean', i, :]).flatten()
 
         v = optvar['v', 0, :]
-        u[t, :] = np.array(u_func(mean[t, :], v)).flatten()
+        K = np.array(optvar['K']).reshape((Nu, Ny))
+        print('K')
+        print(K)
+        u[t, :] = np.array(u_func(mean[t, :], v, K)).flatten()
         variance[t + 1, :] = np.array(optvar['variance', -1, :]).flatten()
-
+        
         # Print status
-        print("* t=%d: %s - %f s" % (t * dt, status, solve_time))
-
+        print("* t=%d: %s - %f sec" % (t * dt, status, solve_time))
+        
         # Simulate the next step
+        sim_time = -time.time()
         try:
             mean[t + 1, :] = simulator(mean[t, :], u[t, :].reshape((1, 2)),
                                 dt, dt, noise=True)
@@ -347,6 +398,8 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
             mean = mean.clip(min=1e-6)
             mean[t + 1, :] = simulator(mean[t, :], u[t, :].reshape((1, 2)),
                                 dt, dt, noise=True)
+        sim_time += time.time()
+        print('\t Sim time: %f sec' % sim_time)
     if plot:
         x_sp = np.ones((Nsim + 1, Ny)) * x_sp
         fig_x, fig_u = plot_mpc(x=mean, u=u, dt=dt, x_pred=mean_prediction,
@@ -355,6 +408,313 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
                )
         fig_x.savefig("mpc.png", bbox_inches="tight")
     return mean, u
+
+
+
+
+def mpc_single(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
+        ulb=None, uub=None, xlb=None, xub=None, terminal_constraint=None,
+        feedback=True, method='TA', log=False, meanFunc='zero', 
+        costFunc='quad', plot=False):
+    """ Model Predictive Control
+
+    # Arguments:
+        X: Training data matrix with inputs of size (N x Nx), where Nx is the number
+            of inputs to the GP and N number of training points.
+        Y: Training data matrix with outpyts of size (N x Ny), with Ny number of outputs.
+        invK: Array with the inverse covariance matrices of size (Ny x N x N),
+            with Ny number of outputs from the GP.
+        hyper: Array with hyperparameters [ell_1 .. ell_Nx sf sn].
+        method: Method of propagating the uncertainty
+            Possible options:
+                'TA': Second order Taylor approximation
+                'ME': Mean equivalent approximation
+    # Returns:
+        mean: Simulated output
+        u: Control inputs
+    """
+    build_solver_time = -time.time()
+    Nsim = int(sim_time / dt)
+
+    Nt = int(horizon / dt)
+    Ny = Y.shape[1]
+    Nx = X.shape[1]
+    Nu = Nx - Ny
+
+    P = np.eye(Ny) * 1
+#    P = np.array([[6, .0, .0, .0],
+#                  [.0, 6, .0, .0],
+#                  [.0, .0, 6, .0],
+#                  [.0, .0, .0, 31]])
+#    Q = np.array([[6, .0, .0, .0],
+#                  [.0, 6, .0, .0],
+#                  [.0, .0, 6, .0],
+#                  [.0, .0, .0, 31]])
+    Q = np.eye(Ny) * 1
+    R = np.eye(Nu) * 0.001
+    
+    percentile = 0.95
+    quantile_x = np.ones(Ny) * scipy.stats.norm.ppf(percentile)
+    quantile_u = np.ones(Nu) * scipy.stats.norm.ppf(percentile)
+    H_x = ca.MX.eye(Ny)
+    H_u = ca.MX.eye(Nu)
+    #K = np.ones((Nu, Ny)) * 0.001
+
+    # Initial state
+    mean_0 = x0
+    mean_ref = x_sp
+  
+    variance_0 = np.ones(Ny) * 1e-3
+
+    mean_s = ca.MX.sym('mean', Ny)
+    variance_s = ca.MX.sym('var', Ny)
+    covar_x_s = ca.MX.sym('covar', Ny, Ny)
+    v_s = ca.MX.sym('v', Nu)
+    u_s = ca.MX.sym('u', Nu)
+    z_s = ca.vertcat(mean_s, v_s)
+    K_s = ca.MX.sym('K', Nu, Ny)
+
+    if method is 'ME':
+        gp_func = ca.Function('gp_mean', [z_s, variance_s],
+                            gp(invK, ca.MX(X), ca.MX(Y), ca.MX(hyper),
+                               z_s.T, meanFunc=meanFunc, log=log))
+    elif method is 'TA':
+        gp_func = ca.Function('gp_taylor_approx', [z_s, variance_s],
+                            gp_taylor_approx(invK, ca.MX(X), ca.MX(Y),
+                                             ca.MX(hyper), z_s.T, variance_s,
+                                             meanFunc=meanFunc, diag=True, log=log))
+    else:
+        raise NameError('No GP method called: ' + method)
+
+    # Define stage cost and terminal cost
+    if costFunc is 'quad':
+        l_func = ca.Function('l', [mean_s, covar_x_s, u_s, K_s],
+                           [cost_l(mean_s, ca.MX(mean_ref), covar_x_s, u_s,
+                                       ca.MX(Q), ca.MX(R), K_s)])
+        lf_func = ca.Function('lf', [mean_s, covar_x_s],
+                               [cost_lf(mean_s, ca.MX(mean_ref), covar_x_s,  ca.MX(P))])
+    elif costFunc is 'sat':
+        l_func = ca.Function('l', [mean_s, covar_x_s, u_s, K_s],
+                           [cost_saturation_l(mean_s, ca.MX(mean_ref), covar_x_s, u_s,
+                                       ca.MX(Q), ca.MX(R), K_s)])
+        lf_func = ca.Function('lf', [mean_s, covar_x_s],
+                               [cost_saturation_lf(mean_s, ca.MX(mean_ref), covar_x_s,  ca.MX(P))])
+    else:
+         raise NameError('No cost function called: ' + costFunc)
+    
+    # Feedback function
+    if feedback:
+        u_func = ca.Function('u', [mean_s, v_s, K_s], [ca.mtimes(K_s,
+                             mean_s) + v_s])
+    else:
+        u_func = ca.Function('u', [mean_s, v_s, K_s], [v_s])
+    
+    covar_u  = ca.Function('covar_u', [covar_x_s, K_s],
+                       [K_s @ covar_x_s @ K_s.T])
+
+    # Create variables struct
+    var = ctools.struct_symMX([(
+            #ctools.entry('mean', shape=(Ny,), repeat=Nt + 1),
+            #ctools.entry('variance', shape=(Ny,), repeat=Nt + 1),
+            #ctools.entry('variance_u', shape=(Nu,), repeat=Nt + 1),
+            ctools.entry('v', shape=(Nu,), repeat=Nt),
+            ctools.entry('K', shape=(Nu*Ny,)),
+    )])
+    num_var = var.size
+
+    varlb = var(-np.inf)
+    varub = var(np.inf)
+    varguess = var(0)
+    
+    # Adjust boundries
+    for t in range(Nt):
+        #varlb['variance', t, :] = np.ones(Ny) * 1e-6
+        #varlb['variance_u', t, :] = np.ones(Nu) * 1e-8
+        varlb['K', :] = np.ones(Nu * Ny) * 1e-8
+
+    # Now build up constraints and objective
+    obj = ca.MX(0)
+    con_g = []
+    con_state = []
+    con_state_lb    = [] #np.fill((2 * Nt,), -np.inf) #np.tile(xlb, Nt)
+    con_state_ub    = [] #np.fill((2 * Nt,), np.inf) #np.tile(xub, Nt)
+    con_input = []
+    con_input_lb    = [] # np.tile(ulb, Nt)
+    con_input_ub    =  [] #np.tile(uub, Nt)
+    
+    param_s = ctools.struct_symMX([(
+            ctools.entry('mean', shape=(Ny,)),
+            ctools.entry('variance', shape=(Ny,)),
+            #ctools.entry('variance_u', shape=(Nu,), repeat=Nt + 1),
+    )])
+    mean_s = ca.MX.sym('mean', Ny)
+    variance_s = ca.MX.sym('variance', Ny)
+    param_s = ca.vertcat(mean_s, variance_s)
+
+    for t in range(Nt):
+        
+        K_t = var['K'].reshape((Nu, Ny))
+        u_t = u_func(mean_s, var['v', t], K_t)
+        z = ca.vertcat(mean_s, u_t)
+        covar_x_t = ca.diag(variance_s)
+        #covar_u_t = covar_u(covar_x_t, K_t)
+        
+        mean_next, var_next = gp_func(z, variance_s)
+        covar_u_next = covar_u(ca.diag(var_next), K_t)
+        var_u_next = ca.diag(covar_u_next)
+        
+        
+        #con_g.append(var['mean', t + 1] - mean_next)
+        #con_g.append(var['variance', t + 1] - var_next)
+        #con_g.append(var['variance_u', t + 1] - var_u_next)
+        
+#        con_state.extend(constraint(mean_next, covar_x_next, H_x, quantile_x))
+#        con_input.extend(constraint(u_t, covar_u_next, H_u, quantile_u))
+
+        con_state.append(mean_next + quantile_x * ca.sqrt(var_next) )
+        con_state_ub.append(xub)
+        con_state_lb.append(np.full((Ny,), -np.inf))
+
+        con_state.append(mean_next - quantile_x * ca.sqrt(var_next))
+        con_state_ub.append(np.full((Ny,), np.inf))
+        con_state_lb.append(xlb)
+
+        con_input.append(u_t + quantile_u * ca.sqrt(var_u_next))
+        con_input_ub.extend(uub)
+        con_input_lb.append(np.full((Nu,), -np.inf))
+        
+        con_input.append(u_t - quantile_u * ca.sqrt(var_u_next))
+        con_input_ub.append(np.full((Nu,), np.inf))
+        con_input_lb.append(ulb)
+        
+        obj += l_func(mean_s, covar_x_t, u_t, K_t)
+        
+        mean_s = mean_next
+        variance_s = var_next
+    obj += lf_func(mean_s, ca.diag(variance_s))
+    
+    if terminal_constraint is not None:
+        con_g.append(mean_s - mean_ref)
+        con_g_lb = np.zeros((Ny * Nt * 2  + Ny,))
+        con_g_ub = np.zeros((Ny * Nt * 2  + Ny,))
+#        con_g_lb = np.zeros((Ny * Nt * 2  + Nu * Nt + Ny,))
+#        con_g_ub = np.zeros((Ny * Nt * 2  + Nu * Nt + Ny,))
+        con_g_lb.append(- terminal_constraint)
+        con_g_ub.append(terminal_constraint)
+    else:
+        con_g_lb = np.zeros((Ny * Nt * 2 ,))
+        con_g_ub = np.zeros((Ny * Nt * 2 ,))
+#        con_g_lb = np.zeros((Ny * Nt * 2 + Nu * Nt,))
+#        con_g_ub = np.zeros((Ny * Nt * 2 + Nu * Nt,))
+    con = ca.vertcat(*con_state, *con_input)
+    conlb = ca.vertcat(*con_state_lb, *con_input_lb)
+    conub = ca.vertcat(*con_state_ub, *con_input_ub)
+    
+    # Build solver object
+    nlp = dict(x=var, f=obj, g=con, p=param_s)
+    opts = {}
+    opts['ipopt.print_level'] = 0
+    opts['ipopt.linear_solver'] = 'ma27'
+    opts['ipopt.max_cpu_time'] = 1
+    opts['ipopt.warm_start_init_point'] = 'no'
+    opts['print_time'] = False
+    opts['verbose'] = False
+    opts['expand'] = True
+    solver = ca.nlpsol('solver', 'ipopt', nlp, opts)
+
+    # Simulate
+    mean = np.zeros((Nsim + 1, Ny))
+    mean[0, :] = mean_0
+    variance = np.zeros((Nsim + 1, Ny))
+    variance[0, :] = variance_0
+    u = np.zeros((Nsim, Nu))
+    u[0,:] = np.array(ulb) + 10
+    #K = np.ones((Nu, Ny)) * 1e-3
+    
+    # Warm start each round
+    lam_x0 = np.zeros(num_var)
+    lam_g0 = 0
+
+    build_solver_time += time.time()
+    print('\n________________________________________')
+    print('# Time to build mpc solver: %f sec' % build_solver_time)
+    print('----------------------------------------')
+    print('\nSolving MPC with %d step horizon' % Nt)
+    for t in range(Nsim):
+        solve_time = -time.time()
+
+        # Fix initial state
+        #varlb['mean', 0, :] = mean[t, :]
+        #varub['mean', 0, :] = mean[t, :]
+        #varlb['variance', 0, :] = variance[t, :]
+        #varub['variance', 0, :] = variance[t, :]
+
+        param  = ca.vertcat(mean[t, :], variance[t, :])
+        
+#        varguess['variance_u', 0, :] = np.ones(Nu) * 1e-6
+#        varguess['v', 0, :] = u[t, :] - np.dot(K, mean[t, :])
+
+        args = dict(x0=varguess,
+                    lbx=varlb,
+                    ubx=varub,
+                    lbg=conlb,
+                    ubg=conub,
+                    lam_x0=lam_x0,
+                    lam_g0=lam_g0,
+                    p=param)
+
+        # Solve nlp
+        sol = solver(**args)
+        status = solver.stats()['return_status']
+        optvar = var(sol['x'])
+        lam_x0 = sol['lam_x']
+        lam_g0 = sol['lam_g']
+        solve_time += time.time()
+
+#        if t == 0:
+#             var_prediction = np.zeros((Nt + 1, Ny))
+#             mean_prediction = np.zeros((Nt + 1, Ny))
+#             for i in range(Nt + 1):
+#                 var_prediction[i, :] = np.array(optvar['variance', i, :]).flatten()
+#                 mean_prediction[i, :] = np.array(optvar['mean', i, :]).flatten()
+
+        v = optvar['v', 0, :]
+        K = np.array(optvar['K']).reshape((Nu, Ny))
+        print('K')
+        print(K)
+        u[t, :] = np.array(u_func(mean[t, :], v, K)).flatten()
+#        variance[t + 1, :] = np.array(optvar['variance', -1, :]).flatten()
+        
+        # Print status
+        print("* t=%d: %s - %f sec" % (t * dt, status, solve_time))
+        
+        # Simulate the next step
+        sim_time = -time.time()
+        try:
+            mean[t + 1, :] = simulator(mean[t, :], u[t, :].reshape((1, 2)),
+                                dt, dt, noise=True)
+        except RuntimeError:
+            print('********************************')
+            print('* Runtime error, adding jitter *')
+            print('********************************')
+            u = u.clip(min=1e-6)
+            mean = mean.clip(min=1e-6)
+            mean[t + 1, :] = simulator(mean[t, :], u[t, :].reshape((1, 2)),
+                                dt, dt, noise=True)
+        sim_time += time.time()
+        print('\t Sim time: %f sec' % sim_time)
+    if plot:
+        x_sp = np.ones((Nsim + 1, Ny)) * x_sp
+        fig_x, fig_u = plot_mpc(x=mean, u=u, dt=dt,
+                    x_sp=x_sp,
+                   title='MPC with %d step/ %d s horizon - GP: %s' % (Nt, horizon, method)
+               )
+        fig_x.savefig("mpc.png", bbox_inches="tight")
+    return mean, u
+
+
+
+
 
 
 def plot_mpc(x, u, dt, x_pred=None, var_pred=None, x_sp=None, title=None,
@@ -391,10 +751,6 @@ def plot_mpc(x, u, dt, x_pred=None, var_pred=None, x_sp=None, title=None,
         if x_pred is not None:
             ax.errorbar(t_horizon, x_pred[:, i], yerr=2 * np.sqrt(var_pred[:, i]),
                         linestyle='None', marker='.', color='r', label='1st prediction')
-            plt.plot(t_horizon, x_pred[:, i], 'r.', label='1st prediction')
-            plt.gca().fill_between(t_horizon.flat, x_pred[:, i] -
-                   2 * np.sqrt(var_pred[:, i]), x_pred[:, i] +
-                   2 * np.sqrt(var_pred[:, i]), color="#bbbbbb", label='95% conf 1st prediction')
         plt.legend(loc='best')
         ax.set_ylabel(xnames[i])
         ax.set_xlabel('Time [' + time_unit + ']')

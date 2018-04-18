@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
 from gp_casadi.gp_functions import gp, gp_exact_moment, gp_taylor_approx
 from gp_casadi.optimize import train_gp
-from gp_casadi.mpc import mpc
+from gp_casadi.mpc import mpc, mpc_single
 from simulation.four_tank import sim_system
 dir_data = 'data/'
 dir_parameters = 'parameters/'
@@ -166,7 +166,7 @@ if __name__ == "__main__":
         for i in range(Ny):
             invK[i, :, :] = np.loadtxt(dir_parameters + 'invK' + str(i + 1), delimiter=',')
 
-    eps = 1e-3
+    eps = 7
     dt = 10
     x0 = np.array([8., 10., 8., 18.])
     x_sp = np.array([14., 14., 14.2, 21.3])
@@ -191,8 +191,8 @@ if __name__ == "__main__":
         invK  = opt['invK']
         lam_x = opt['lam_x']
 
-    x, u= mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0,
-          sim_time=200.0, dt=dt, simulator=sim_system, method='TA',
+    x, u= mpc(X, Y, x0, x_sp, invK, hyper, horizon=6*dt,
+          sim_time=200.0, dt=dt, simulator=sim_system, method='ME',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, plot=True,
           meanFunc=meanFunc, terminal_constraint=None, log=log,
           costFunc='quad')
