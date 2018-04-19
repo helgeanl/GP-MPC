@@ -95,6 +95,21 @@ def gp(invK, X, Y, hyper, inputmean,  meanFunc='zero', log=False):
     sf2_s = ca.SX.sym('sf2')
     covSE = ca.Function('covSE', [x_s, z_s, ell_s, sf2_s],
                           [covSEard(x_s, z_s, ell_s, sf2_s)])
+    
+    invK_s = ca.SX.sym('invK', N, N)
+    ks_s = ca.SX.sym('ks', N)
+    ksK_func = ca.Function('ksK', [ks_s, invK_s], [ca.mtimes(ks_s.T, invK_s)])
+    
+    ksK_s = ca.SX.sym('ksK', 1, N)
+    kss_s = ca.SX.sym('kss')
+    Y_s = ca.SX.sym('Y', N)
+    m_s = ca.SX.sym('m')
+    mean_func = ca.Function('mean', [ksK_s, Y_s, m_s], 
+                       [ca.mtimes(ksK_s, Y_s - m_s + m_s)])
+    
+    
+    var_func  = ca.Function('var', [kss_s, ks_s, ksK_s], 
+                            [kss_s - ca.mtimes(ksK_s, ks_s)])
 
     for output in range(Ny):
         m = get_mean_function(hyper[output, :], inputmean, func=meanFunc)
@@ -105,19 +120,21 @@ def gp(invK, X, Y, hyper, inputmean,  meanFunc='zero', log=False):
         ks = ca.MX.zeros(N, 1)
         for i in range(N):
             ks[i] = covSE(X[i, :], inputmean, ell, sf2)
+        
+        ksK = ksK_func(ks, invK[output])
 
-        ksK = ca.mtimes(ks.T, invK[output])
-
-        mean[output] = ca.mtimes(ksK, Y[:, output] - m(inputmean)) + m(inputmean)
-        var[output] = kss - ca.mtimes(ksK, ks)
+        mean[output] = mean_func(ksK, Y[:, output], m(inputmean))
+        var[output] = var_func(kss, ks, ksK)
     
     if log:
         mean = ca.exp(mean)
         var = ca.exp(var)
-    return mean, var
+        
+    covar = ca.diag(var)
+    return mean, covar
 
 
-def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar,
+def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputcovar,
                      meanFunc='zero', diag=False, log=False):
     """ Gaussian Process with Taylor Approximation
 
@@ -149,11 +166,12 @@ def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar,
     mean       = ca.MX.zeros(Ny, 1)
     var        = ca.MX.zeros(Nx, 1)
     v          = X - ca.repmat(inputmean, N, 1)
-    covar      = ca.MX.zeros(Ny, Ny)
-    variance   = ca.MX.zeros(Ny)
+    covar_temp      = ca.MX.zeros(Ny, Ny)
+
     covariance = ca.MX.zeros(Ny, Ny)
     d_mean     = ca.MX.zeros(Ny, 1)
     dd_var     = ca.MX.zeros(Ny, Ny)
+    
 
     # Casadi symbols
     x_s     = ca.SX.sym('x', Nx)
@@ -190,21 +208,11 @@ def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputvar,
                 if d == e:
                     dd_var[d, e] = dd_var[d, e] + 2 * w[d] * (kss - var[d])
 
-        covar1 = ca.mtimes(d_mean, d_mean.T)
-        covar[0, 0] = inputvar[a]
-        if diag:
-            variance[a] = var[a] + ca.trace(ca.mtimes(covar, .5 * dd_var + covar1))
-        else:
-            covariance[a, a] = var[a] + ca.trace(ca.mtimes(covar, .5 * dd_var + covar1))
+        mean_mat = ca.mtimes(d_mean, d_mean.T)
+        covar_temp[0, 0] = inputcovar[a, a]
+        covariance[a, a] = var[a] + ca.trace(ca.mtimes(covar_temp, .5 * dd_var + mean_mat))
 
-    if log:
-        mean = ca.exp(mean)
-        variance = ca.exp(variance)
-        
-    if diag:
-        return [mean, variance]
-    else:
-        return [mean, covariance]
+    return [mean, covariance]
 
 
 def gp_exact_moment(invK, X, Y, hyper, inputmean, inputcov):

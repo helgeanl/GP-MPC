@@ -18,7 +18,8 @@ import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
 from gp_casadi.gp_functions import gp, gp_exact_moment, gp_taylor_approx
 from gp_casadi.optimize import train_gp
-from gp_casadi.mpc import mpc, mpc_single
+from gp_casadi.mpc import mpc
+from gp_casadi.mpc_single_shooting import mpc_single
 from simulation.four_tank import sim_system
 dir_data = 'data/'
 dir_parameters = 'parameters/'
@@ -192,10 +193,10 @@ if __name__ == "__main__":
         lam_x = opt['lam_x']
 
     x, u= mpc(X, Y, x0, x_sp, invK, hyper, horizon=6*dt,
-          sim_time=200.0, dt=dt, simulator=sim_system, method='ME',
+          sim_time=6*dt, dt=dt, simulator=sim_system, method='ME',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, plot=True,
           meanFunc=meanFunc, terminal_constraint=None, log=log,
-          costFunc='quad')
+          costFunc='quad', feedback=True)
     
     #mean, u_mpc = mpc(X, Y, invK, hyper, method='ME')
     #mu, var  = predict_casadi(X, Y, invK, hyper, x0, u_mpc)
