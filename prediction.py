@@ -193,7 +193,7 @@ if __name__ == "__main__":
         lam_x = opt['lam_x']
 
     x, u= mpc(X, Y, x0, x_sp, invK, hyper, horizon=6*dt,
-          sim_time=6*dt, dt=dt, simulator=sim_system, method='ME',
+          sim_time=6*dt, dt=dt, simulator=sim_system, method='TA',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, plot=True,
           meanFunc=meanFunc, terminal_constraint=None, log=log,
           costFunc='quad', feedback=True)

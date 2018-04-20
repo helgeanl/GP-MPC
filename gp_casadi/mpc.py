@@ -125,7 +125,7 @@ def constraint(mean, covar, H, quantile):
 
 
 def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
-        ulb=None, uub=None, xlb=None, xub=None, terminal_constraint=None,
+        u0=None, ulb=None, uub=None, xlb=None, xub=None, terminal_constraint=None,
         feedback=True, method='TA', log=False, meanFunc='zero', 
         costFunc='quad', plot=False):
     """ Model Predictive Control
@@ -153,7 +153,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     Nx = X.shape[1]
     Nu = Nx - Ny
 
-    P = np.eye(Ny) * 10
+    P = np.eye(Ny) * 50
 #    P = np.array([[6, .0, .0, .0],
 #                  [.0, 6, .0, .0],
 #                  [.0, .0, 6, .0],
@@ -162,8 +162,8 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
 #                  [.0, 6, .0, .0],
 #                  [.0, .0, 6, .0],
 #                  [.0, .0, .0, 31]])
-    Q = np.eye(Ny) * 1
-    R = np.eye(Nu) * 0.01
+    Q = np.eye(Ny) * 5
+    R = np.eye(Nu) * 0.1
     
     percentile = 0.95
     quantile_x = np.ones(Ny) * norm.ppf(percentile)
@@ -175,7 +175,9 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     # Initial state
     mean_0 = x0
     mean_ref = x_sp
-  
+    if u0 is None:
+        u0 = np.zeros(Nu)
+    
     variance_0 = np.ones(Ny) * 1e-3
 
     mean_s = ca.MX.sym('mean', Ny)
@@ -221,8 +223,8 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     
     # Feedback function
     if feedback:
-        u_func = ca.Function('u', [mean_s, v_s, K_s], [ca.mtimes(K_s,
-                             mean_s - ca.MX(mean_ref)) + v_s])
+        u_func = ca.Function('u', [mean_s, v_s, K_s], 
+                             [ca.mtimes(K_s, mean_s - ca.MX(mean_ref)) + v_s])
     else:
         u_func = ca.Function('u', [mean_s, v_s, K_s], [v_s])
     
@@ -239,10 +241,10 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     )])
     num_var = var.size
     
-    mean_init_s = ca.MX.sym('mean', Ny)
-    #variance_init_s = ca.MX.sym('variance', Ny)
-    variance_init_s = ca.MX.sym('covariance', Ny * Ny)
-    param_s = ca.vertcat(mean_init_s, variance_init_s)
+    mean_0_s = ca.MX.sym('mean_0', Ny)
+    u_0_s = ca.MX.sym('u_0', Nu)
+    covariance_0_s = ca.MX.sym('covariance_0', Ny * Ny)
+    param_s = ca.vertcat(mean_0_s, covariance_0_s, u_0_s)
     
     varlb = var(-np.inf)
     varub = var(np.inf)
@@ -250,7 +252,6 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     
     # Adjust boundries
     for t in range(Nt):
-        #varlb['variance', t] = np.full((Ny,), 1e-8)
         varlb['covariance', t] = np.full((Ny * Ny,), 1e-8)
     varlb['K'] = np.full((Nu * Ny,), 0)
 
@@ -262,49 +263,40 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     con_ineq_ub = []
     
     # Set initial value
-    con_eq.append(var['mean', 0] - mean_init_s)
-    #con_eq.append(var['variance', 0] - variance_init_s)
-    con_eq.append(var['covariance', 0] - variance_init_s)
-
+    con_eq.append(var['mean', 0] - mean_0_s)
+    con_eq.append(var['covariance', 0] - covariance_0_s)
+    u_past = u_0_s
     for t in range(Nt):
- 
+        # Input to GP
         K_t = var['K'].reshape((Nu, Ny))
         u_t = u_func(var['mean', t], var['v', t], K_t)
         z = ca.vertcat(var['mean', t], u_t)
-        #covar_x_t = ca.diag(var['variance', t])
         covar_x_t = var['covariance', t].reshape((Ny, Ny))
         
-        #mean_next, var_next = gp_func(z, var['variance', t])
+        # Calculate next step
         mean_next, covar_next = gp_func(z, covar_x_t)
-
+#        covar_u_next = covar_u(covar_next, K_t)
+        
+        # Continuity constraints
         con_eq.append(var['mean', t + 1] - mean_next)
-        #con_eq.append(var['variance', t + 1] - var_next)
         con_eq.append(var['covariance', t + 1] - covar_next.reshape((Ny * Ny,1)))
         
+        # Chance state constraints
         con_ineq.append(mean_next + quantile_x * ca.sqrt(ca.diag(covar_next) ))
         con_ineq_ub.append(xub)
         con_ineq_lb.append(np.full((Ny,), -ca.inf))
-
         con_ineq.append(mean_next - quantile_x * ca.sqrt(ca.diag(covar_next)))
         con_ineq_ub.append(np.full((Ny,), ca.inf))
         con_ineq_lb.append(xlb)
 
-#        covar_u_next = covar_u(covar_next, K_t)
-#        var_u_next = ca.diag(covar_u_next)
-#
-#        con_ineq.append(var_u_next)
-#        con_ineq_ub.append(np.full((Nu,), ca.inf))
-#        con_ineq_lb.append(np.full((Nu,), 1e-3))
-#        
-#        con_ineq.append(u_t + quantile_u * ca.sqrt(var_u_next))
-#        con_ineq_ub.extend(uub)
-#        con_ineq_lb.append(np.full((Nu,), -ca.inf))
-#        
-#        con_ineq.append(u_t - quantile_u * ca.sqrt(var_u_next))
-#        con_ineq_ub.append(np.full((Nu,), ca.inf))
-#        con_ineq_lb.append(ulb)
-#        
-        obj += l_func(var['mean', t], covar_x_t, u_t, K_t)
+        # Input constraints
+        con_ineq.append(u_t )
+        con_ineq_ub.extend(uub)
+        con_ineq_lb.append(ulb)
+        
+        u_delta = u_t - u_past
+        u_t = u_past
+        obj += l_func(var['mean', t], covar_x_t, u_delta, K_t)
     obj += lf_func(var['mean', Nt], var['covariance', Nt].reshape((Ny, Ny)))
     
     num_eq_con = ca.vertcat(*con_eq).size1()
@@ -338,8 +330,6 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     # Simulate
     mean = np.zeros((Nsim + 1, Ny))
     mean[0, :] = mean_0
-#    variance = np.zeros((Nsim + 1, Ny))
-#    variance[0, :] = variance_0
     covariance = np.zeros((Nsim + 1, Ny, Ny))
     covariance[0] = np.diag(variance_0)
 
@@ -362,8 +352,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
         solve_time = -time.time()
 
         # Initial values
-        #param  = ca.vertcat(mean[t, :], np.diag(variance[t, :]).flatten())
-        param  = ca.vertcat(mean[t, :], covariance[t, :].flatten())
+        param  = ca.vertcat(mean[t, :], covariance[t, :].flatten(), u0)
         
         if not feedback:
             print('Not using feedback')
@@ -399,7 +388,6 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
         K = np.array(optvar['K']).reshape((Nu, Ny))
 
         u[t, :] = np.array(u_func(mean[t, :], v, K)).flatten()
-        #variance[t + 1, :] = np.array(ca.diag(optvar['covariance', -1])).flatten()
         covariance[t + 1, :] = np.array(optvar['covariance', -1, :].reshape((Ny, Ny)))
       
                  
