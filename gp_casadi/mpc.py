@@ -38,15 +38,15 @@ def cost_saturation_lf(x, x_ref, covar_x, P):
     """ Terminal Cost function: Expected Value of Saturating Cost
     """
     Nx = ca.MX.size1(P)
-    
+
     # Create symbols
     P_s = ca.SX.sym('P', Nx, Nx)
     x_s = ca.SX.sym('x', Nx)
     covar_x_s = ca.SX.sym('covar_z', Nx, Nx)
 
-    Z_x = ca.SX.eye(Nx) #+ 2 * covar_x_s @ P_s 
-    cost_x = ca.Function('cost_x', [x_s, P_s, covar_x_s], 
-                       [1 - ca.exp(-(x_s.T @ ca.solve(Z_x.T, P_s.T).T @ x_s)) 
+    Z_x = ca.SX.eye(Nx) #+ 2 * covar_x_s @ P_s
+    cost_x = ca.Function('cost_x', [x_s, P_s, covar_x_s],
+                       [1 - ca.exp(-(x_s.T @ ca.solve(Z_x.T, P_s.T).T @ x_s))
                                / ca.sqrt(ca.det(Z_x))])
     return cost_x(x - x_ref, P, covar_x)
 
@@ -56,7 +56,7 @@ def cost_saturation_l(x, x_ref, covar_x, u, Q, R, K):
     """
     Nx = ca.MX.size1(Q)
     Nu = ca.MX.size1(R)
-    
+
     # Create symbols
     Q_s = ca.SX.sym('Q', Nx, Nx)
     R_s = ca.SX.sym('Q', Nu, Nu)
@@ -65,17 +65,17 @@ def cost_saturation_l(x, x_ref, covar_x, u, Q, R, K):
     u_s = ca.SX.sym('x', Nu)
     covar_x_s = ca.SX.sym('covar_z', Nx, Nx)
     covar_u_s = ca.SX.sym('covar_u', ca.MX.size(R))
-    
+
     covar_u  = ca.Function('covar_u', [covar_x_s, K_s],
                            [K_s @ covar_x_s @ K_s.T])
 
-    Z_x = ca.SX.eye(Nx) + 2 * covar_x_s @ Q_s 
-    Z_u = ca.SX.eye(Nu) + 2 * covar_u_s @ R_s 
-    
-    cost_x = ca.Function('cost_x', [x_s, Q_s, covar_x_s], 
-                       [1 - ca.exp(-(x_s.T @ ca.solve(Z_x.T, Q_s.T).T @ x_s)) 
+    Z_x = ca.SX.eye(Nx) + 2 * covar_x_s @ Q_s
+    Z_u = ca.SX.eye(Nu) + 2 * covar_u_s @ R_s
+
+    cost_x = ca.Function('cost_x', [x_s, Q_s, covar_x_s],
+                       [1 - ca.exp(-(x_s.T @ ca.solve(Z_x.T, Q_s.T).T @ x_s))
                                / ca.sqrt(ca.det(Z_x))])
-    cost_u = ca.Function('cost_u', [u_s, R_s, covar_u_s], 
+    cost_u = ca.Function('cost_u', [u_s, R_s, covar_u_s],
                        [1 - ca.exp(-(u_s.T @ ca.solve(Z_u.T, R_s.T).T @ u_s))
                                / ca.sqrt(ca.det(Z_u))])
 
@@ -113,8 +113,8 @@ def constraint(mean, covar, H, quantile):
     mean_s = ca.SX.sym('mean', ca.MX.size(mean))
     covar_s = ca.SX.sym('r', ca.MX.size(covar))
     H_s = ca.SX.sym('H', 1, ca.MX.size2(H))
-    
-    con_func = ca.Function('con', [mean_s, covar_s, H_s, r], 
+
+    con_func = ca.Function('con', [mean_s, covar_s, H_s, r],
                            [H_s @ mean_s + r * ca.sqrt(H_s @ covar_s @ H_s.T)])
     con = []
     r = quantile
@@ -126,7 +126,7 @@ def constraint(mean, covar, H, quantile):
 
 def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
         u0=None, ulb=None, uub=None, xlb=None, xub=None, terminal_constraint=None,
-        feedback=True, method='TA', log=False, meanFunc='zero', 
+        feedback=True, method='TA', log=False, meanFunc='zero',
         costFunc='quad', plot=False):
     """ Model Predictive Control
 
@@ -164,7 +164,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
 #                  [.0, .0, .0, 31]])
     Q = np.eye(Ny) * 5
     R = np.eye(Nu) * 0.1
-    
+
     percentile = 0.95
     quantile_x = np.ones(Ny) * norm.ppf(percentile)
     quantile_u = np.ones(Nu) * norm.ppf(percentile)
@@ -177,7 +177,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     mean_ref = x_sp
     if u0 is None:
         u0 = np.zeros(Nu)
-    
+
     variance_0 = np.ones(Ny) * 1e-3
 
     mean_s = ca.MX.sym('mean', Ny)
@@ -220,14 +220,14 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
                                [cost_saturation_lf(mean_s, ca.MX(mean_ref), covar_x_s,  ca.MX(P))])
     else:
          raise NameError('No cost function called: ' + costFunc)
-    
+
     # Feedback function
     if feedback:
-        u_func = ca.Function('u', [mean_s, v_s, K_s], 
+        u_func = ca.Function('u', [mean_s, v_s, K_s],
                              [ca.mtimes(K_s, mean_s - ca.MX(mean_ref)) + v_s])
     else:
         u_func = ca.Function('u', [mean_s, v_s, K_s], [v_s])
-    
+
     covar_u  = ca.Function('covar_u', [covar_x_s, K_s],
                        [K_s @ covar_x_s @ K_s.T])
 
@@ -240,16 +240,16 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
             ctools.entry('K', shape=(Nu*Ny,)),
     )])
     num_var = var.size
-    
+
     mean_0_s = ca.MX.sym('mean_0', Ny)
     u_0_s = ca.MX.sym('u_0', Nu)
     covariance_0_s = ca.MX.sym('covariance_0', Ny * Ny)
     param_s = ca.vertcat(mean_0_s, covariance_0_s, u_0_s)
-    
+
     varlb = var(-np.inf)
     varub = var(np.inf)
     varguess = var(0)
-    
+
     # Adjust boundries
     for t in range(Nt):
         varlb['covariance', t] = np.full((Ny * Ny,), 1e-8)
@@ -261,26 +261,30 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     con_ineq = []
     con_ineq_lb = []
     con_ineq_ub = []
-    
+
     # Set initial value
     con_eq.append(var['mean', 0] - mean_0_s)
     con_eq.append(var['covariance', 0] - covariance_0_s)
-    u_past = u_0_s
+    con_eq.append(u_past - u_0_s)
+
+    if not feedback:
+        con_eq.append(var['K'])
+
     for t in range(Nt):
         # Input to GP
         K_t = var['K'].reshape((Nu, Ny))
         u_t = u_func(var['mean', t], var['v', t], K_t)
         z = ca.vertcat(var['mean', t], u_t)
         covar_x_t = var['covariance', t].reshape((Ny, Ny))
-        
+
         # Calculate next step
         mean_next, covar_next = gp_func(z, covar_x_t)
 #        covar_u_next = covar_u(covar_next, K_t)
-        
+
         # Continuity constraints
         con_eq.append(var['mean', t + 1] - mean_next)
         con_eq.append(var['covariance', t + 1] - covar_next.reshape((Ny * Ny,1)))
-        
+
         # Chance state constraints
         con_ineq.append(mean_next + quantile_x * ca.sqrt(ca.diag(covar_next) ))
         con_ineq_ub.append(xub)
@@ -293,17 +297,17 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
         con_ineq.append(u_t )
         con_ineq_ub.extend(uub)
         con_ineq_lb.append(ulb)
-        
+
         u_delta = u_t - u_past
         u_t = u_past
         obj += l_func(var['mean', t], covar_x_t, u_delta, K_t)
     obj += lf_func(var['mean', Nt], var['covariance', Nt].reshape((Ny, Ny)))
-    
+
     num_eq_con = ca.vertcat(*con_eq).size1()
     num_ineq_con = ca.vertcat(*con_ineq).size1()
     con_eq_lb = np.zeros((num_eq_con,))
     con_eq_ub = np.zeros((num_eq_con,))
-        
+
     if terminal_constraint is not None:
         con_ineq.append(var['mean', Nt] - mean_ref)
         num_ineq_con += 1
@@ -313,7 +317,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     con = ca.vertcat(*con_eq, *con_ineq)
     conlb = ca.vertcat(con_eq_lb, *con_ineq_lb)
     conub = ca.vertcat(con_eq_ub, *con_ineq_ub)
-    
+
     # Build solver object
     nlp = dict(x=var, f=obj, g=con, p=param_s)
     opts = {}
@@ -335,7 +339,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
 
     u = np.zeros((Nsim, Nu))
     u[0,:] = np.array(ulb) + 10
-    
+
     # Warm start each round
     lam_x0 = np.zeros(num_var)
     lam_g0 = 0
@@ -353,12 +357,12 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
 
         # Initial values
         param  = ca.vertcat(mean[t, :], covariance[t, :].flatten(), u0)
-        
+
         if not feedback:
             print('Not using feedback')
             varlb['K'] = np.zeros(Nu * Ny)
             varub['K'] = np.zeros(Nu * Ny)
-        
+
         args = dict(x0=varguess,
                     lbx=varlb,
                     ubx=varub,
@@ -389,11 +393,10 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
 
         u[t, :] = np.array(u_func(mean[t, :], v, K)).flatten()
         covariance[t + 1, :] = np.array(optvar['covariance', -1, :].reshape((Ny, Ny)))
-      
-                 
+
         # Print status
         print("* t=%d: %s - %f sec" % (t * dt, status, solve_time))
-        
+
         # Simulate the next step
         sim_time = -time.time()
         try:
