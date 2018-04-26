@@ -178,12 +178,12 @@ if __name__ == "__main__":
 
     x0_ = x0
     for i in range(0):
-        x, u = mpc(X, Y, x0, x_sp, invK, hyper, horizon=120.0,
-                          sim_time=60.0, dt=dt, simulator=sim_system, method='TA',
+        x, u = mpc(X, Y, x0, x_sp, invK, hyper, horizon=6*dt,
+                          sim_time=2*dt, dt=dt, simulator=sim_system, method='TA',
                           ulb=ulb, uub=uub, xlb=xlb, xub=xub,
-                          meanFunc=meanFunc, log=log, costFunc='quad', plot=False)
-        X = np.vstack((X, np.hstack((x[1:2], u[1:]))))
-        Y = np.vstack((Y, x[2:]))
+                          meanFunc=meanFunc, log=log, costFunc='quad', plot=True)
+        X = np.vstack((X, np.hstack((x[:-1], u))))
+        Y = np.vstack((Y, x[1:]))
         x0_ = x
 
         # Train again
@@ -192,8 +192,8 @@ if __name__ == "__main__":
         invK  = opt['invK']
         lam_x = opt['lam_x']
 
-    x, u= mpc(X, Y, x0, x_sp, invK, hyper, horizon=6*dt,
-          sim_time=6*dt, dt=dt, simulator=sim_system, method='TA',
+    x, u= mpc(X, Y, x0, x_sp, invK, hyper, horizon=4*dt,
+          sim_time=12*dt, dt=dt, simulator=sim_system, method='TA',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, plot=True,
           meanFunc=meanFunc, terminal_constraint=None, log=log,
           costFunc='quad', feedback=True)
