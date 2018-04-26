@@ -192,8 +192,8 @@ if __name__ == "__main__":
         invK  = opt['invK']
         lam_x = opt['lam_x']
 
-    x, u= mpc(X, Y, x0, x_sp, invK, hyper, horizon=4*dt,
-          sim_time=12*dt, dt=dt, simulator=sim_system, method='TA',
+    x, u= mpc(X, Y, x0, x_sp, invK, hyper, horizon=10*dt,
+          sim_time=12*dt, dt=dt, simulator=sim_system, method='EM',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, plot=True,
           meanFunc=meanFunc, terminal_constraint=None, log=log,
           costFunc='quad', feedback=True)

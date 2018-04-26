@@ -182,7 +182,6 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     variance_0 = np.ones(Ny) * 1e-3
 
     mean_s = ca.MX.sym('mean', Ny)
-    #variance_s = ca.MX.sym('var', Ny)
     covar_x_s = ca.MX.sym('covar', Ny, Ny)
     v_s = ca.MX.sym('v', Nu)
     u_s = ca.MX.sym('u', Nu)
@@ -217,7 +216,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     elif costFunc is 'sat':
         l_func = ca.Function('l', [mean_s, covar_x_s, u_s, delta_u_s, K_s],
                            [cost_saturation_l(mean_s, ca.MX(mean_ref), covar_x_s, u_s, delta_u_s,
-                                       ca.MX(Q), ca.MX(R), ca.MX(R_du), K_s)])
+                                       ca.MX(Q), ca.MX(R_u), ca.MX(R_du), K_s)])
         lf_func = ca.Function('lf', [mean_s, covar_x_s],
                                [cost_saturation_lf(mean_s, ca.MX(mean_ref), covar_x_s,  ca.MX(P))])
     else:
@@ -226,19 +225,19 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     # Feedback function
     if feedback:
         u_func = ca.Function('u', [mean_s, v_s, K_s],
-                             [ca.mtimes(K_s, ca.MX(mean_ref) - mean_s) + v_s])
+                             [ca.mtimes(K_s, mean_s) + v_s])
     else:
         u_func = ca.Function('u', [mean_s, v_s, K_s], [v_s])
 
-    covar_u  = ca.Function('covar_u', [covar_x_s, K_s],
-                       [K_s @ covar_x_s @ K_s.T])
+#    covar_u  = ca.Function('covar_u', [covar_x_s, K_s],
+#                       [K_s @ covar_x_s @ K_s.T])
 
     # Create variables struct
     var = ctools.struct_symMX([(
             ctools.entry('mean', shape=(Ny,), repeat=Nt + 1),
             #ctools.entry('covariance', shape=(Ny * Ny,), repeat=Nt + 1),
             ctools.entry('v', shape=(Nu,), repeat=Nt),
-            ctools.entry('K', shape=(Nu*Ny,)),
+            ctools.entry('K', shape=(Nu*Ny,), repeat=Nt),
     )])
     num_var = var.size
     
@@ -251,16 +250,14 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     # Decision variables boundries
     varlb = var(-np.inf)
     varub = var(np.inf)
-    varguess = var(0)
+    var_init = var(0)
 
     # Adjust boundries
-#    for t in range(Nt):
-#        varlb['covariance', t] = np.full((Ny * Ny,), 1e-8)
-    
-    if not feedback:
-        varlb['K'] = np.full((Nu * Ny,), 0)
-        varub['K'] = np.full((Nu * Ny,), 0)
-    #varlb['K'] = np.full((Nu * Ny,), 0)
+    for t in range(Nt):
+#        varlb['covariance', t] = np.full((Ny * Ny,), 1e-8) 
+        if not feedback:
+            varlb['K', t] = np.full((Nu * Ny,), 0)
+            varub['K', t] = np.full((Nu * Ny,), 0)
 
     # Build up constraints and objective
     obj = ca.MX(0)
@@ -277,10 +274,10 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
 
 #    if not feedback:
 #        con_eq.append(var['K'])
-    K_t = var['K'].reshape((Nu, Ny))
+    
     for t in range(Nt):
         # Input to GP
-        
+        K_t = var['K', t].reshape((Nu, Ny))
         u_t = u_func(var['mean', t], var['v', t], K_t)
         z = ca.vertcat(var['mean', t], u_t)
         #covar_x_t = var['covariance', t].reshape((Ny, Ny))
@@ -334,7 +331,8 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     opts['ipopt.linear_solver'] = 'ma27'
     opts['ipopt.max_cpu_time'] = 4
     #opts['ipopt.max_iter'] = 10
-    opts['ipopt.warm_start_init_point'] = 'no'
+    opts['ipopt.mu_init'] = 0.01
+    opts['ipopt.warm_start_init_point'] = 'yes'
     #opts['ipopt.fixed_variable_treatment'] = 'make_constraint'
     opts['print_time'] = False
     opts['verbose'] = False
@@ -351,7 +349,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     u = np.zeros((Nsim, Nu))
     u[0,:] = np.array(ulb) + 10
 
-    # Warm start each round
+    # Initial guess of the warm start each variables
     lam_x0 = np.zeros(num_var)
     lam_g0 = 0
 
@@ -369,12 +367,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
         # Initial values
         param  = ca.vertcat(mean[t, :], covariance[t, :].flatten(), u0)
 
-        if not feedback:
-            print('* Not using feedback')
-            varlb['K'] = np.zeros(Nu * Ny)
-            varub['K'] = np.zeros(Nu * Ny)
-
-        args = dict(x0=varguess,
+        args = dict(x0=var_init,
                     lbx=varlb,
                     ubx=varub,
                     lbg=conlb,
@@ -387,6 +380,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
         sol = solver(**args)
         status = solver.stats()['return_status']
         optvar = var(sol['x'])
+        var_init = optvar
         lam_x0 = sol['lam_x']
         lam_g0 = sol['lam_g']
         solve_time += time.time()
@@ -400,9 +394,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
                  mean_prediction[i, :] = np.array(optvar['mean', i]).flatten()
 
         v = optvar['v', 0, :]
-        K = np.array(optvar['K']).reshape((Nu, Ny))
-        print('K')
-        print(K)
+        K = np.array(optvar['K', 0]).reshape((Nu, Ny))
         u[t, :] = np.array(u_func(mean[t, :], v, K)).flatten()
 #        covariance[t + 1, :] = np.array(optvar['covariance', -1, :].reshape((Ny, Ny)))
 
