@@ -105,7 +105,7 @@ def cost_l(x, x_ref, covar_x, u, delta_u, Q, R_u, R_du, K, s=1):
                            [s * ca.trace(ca.mtimes(Q_s, covar_x_s))])
 
     return sqnorm_x(x - x_ref, Q) + sqnorm_u(u, R_u) + sqnorm_u(delta_u, R_du) \
-            + trace_x(Q, covar_x) + trace_u(R_u, covar_u(covar_x, K))
+            + trace_x(Q, covar_x)  + trace_u(R_u, covar_u(covar_x, K))
 
 
 def constraint(mean, covar, H, quantile):
@@ -125,6 +125,7 @@ def constraint(mean, covar, H, quantile):
 
 
 def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
+        Q=None, P=None, R_u=None, R_du=None,
         u0=None, ulb=None, uub=None, xlb=None, xub=None, terminal_constraint=None,
         feedback=True, method='TA', log=False, meanFunc='zero',
         costFunc='quad', plot=False):
@@ -152,19 +153,15 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     Ny = Y.shape[1]
     Nx = X.shape[1]
     Nu = Nx - Ny
-
-    P = np.eye(Ny) * 5
-#    P = np.array([[6, .0, .0, .0],
-#                  [.0, 6, .0, .0],
-#                  [.0, .0, 6, .0],
-#                  [.0, .0, .0, 31]])
-#    Q = np.array([[6, .0, .0, .0],
-#                  [.0, 6, .0, .0],
-#                  [.0, .0, 6, .0],
-#                  [.0, .0, .0, 31]])
-    Q = np.eye(Ny) * 5
-    R_u = np.eye(Nu) * 0.0001
-    R_du = np.eye(Nu) * 0.01
+    
+    if P is None:
+        P = np.eye(Ny)
+    if Q is None:
+        Q = np.eye(Ny) * 5
+    if R_u is None:
+        R_u = np.eye(Nu) * 0.001
+    if R_du is None:
+        R_du = np.eye(Nu) * 0.001
 
     percentile = 0.95
     quantile_x = np.ones(Ny) * norm.ppf(percentile)
@@ -332,12 +329,13 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     opts['ipopt.max_cpu_time'] = 4
     #opts['ipopt.max_iter'] = 10
     opts['ipopt.mu_init'] = 0.01
+    opts['ipopt.tol'] = 1e-8
     opts['ipopt.warm_start_init_point'] = 'yes'
     #opts['ipopt.fixed_variable_treatment'] = 'make_constraint'
     opts['print_time'] = False
     opts['verbose'] = False
     opts['expand'] = True
-    #opts['jit'] = True
+#    opts['jit'] = True
     solver = ca.nlpsol('solver', 'ipopt', nlp, opts)
 
     # Simulate
@@ -347,7 +345,6 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     covariance[0] = np.diag(variance_0)
 
     u = np.zeros((Nsim, Nu))
-    u[0,:] = np.array(ulb) + 10
 
     # Initial guess of the warm start each variables
     lam_x0 = np.zeros(num_var)

@@ -20,6 +20,7 @@ from gp_casadi.gp_functions import gp, gp_exact_moment, gp_taylor_approx
 from gp_casadi.optimize import train_gp
 from gp_casadi.mpc import mpc
 from gp_casadi.mpc_single_shooting import mpc_single
+from gp_casadi.mpc_class import MPC
 from simulation.four_tank import sim_system
 dir_data = 'data/'
 dir_parameters = 'parameters/'
@@ -192,12 +193,24 @@ if __name__ == "__main__":
         invK  = opt['invK']
         lam_x = opt['lam_x']
 
-    x, u= mpc(X, Y, x0, x_sp, invK, hyper, horizon=10*dt,
-          sim_time=12*dt, dt=dt, simulator=sim_system, method='EM',
-          ulb=ulb, uub=uub, xlb=xlb, xub=xub, plot=True,
+#    x, u= mpc(X, Y, x0, x_sp, invK, hyper, horizon=10*dt,
+#          sim_time=12*dt, dt=dt, simulator=sim_system, method='EM',
+#          ulb=ulb, uub=uub, xlb=xlb, xub=xub, plot=True,
+#          meanFunc=meanFunc, terminal_constraint=None, log=log,
+#          costFunc='quad', feedback=True)
+    
+    mpc = MPC(X, Y, x0, x_sp, invK, hyper, horizon=10*dt,
+          sim_time=12*dt, dt=dt, method='EM',
+          ulb=ulb, uub=uub, xlb=xlb, xub=xub,
           meanFunc=meanFunc, terminal_constraint=None, log=log,
           costFunc='quad', feedback=True)
+#    mpc.plot()
+    x, u = mpc.solve(simulator=sim_system)
+    mpc.plot()
     
+#    x_sp = np.array([4., 18., 14.2, 30.3])
+    x, u = mpc.solve(simulator=sim_system, x0=x[-1,:], x_sp=x_sp, u0=u[-1,:])
+    mpc.plot()
     #mean, u_mpc = mpc(X, Y, invK, hyper, method='ME')
     #mu, var  = predict_casadi(X, Y, invK, hyper, x0, u_mpc)
     #mu2, var2  = predict(X, Y, invK, hyper, x0, u)
