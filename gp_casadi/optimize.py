@@ -15,7 +15,7 @@ import pyDOE
 import numpy as np
 import casadi as ca
 from scipy.spatial import distance
-from . gp_functions import get_mean_function
+from . gp_functions import get_mean_function, gp
 
 # -----------------------------------------------------------------------------
 # Optimization of hyperperameters as a constrained minimization problem
@@ -82,7 +82,8 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
     return NLL(Y - m(X), alpha, log_detK)
 
 
-def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False, multistart=1):
+def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False, 
+             multistart=1, solver_opts=None):
     """ Train hyperparameters
 
     Maximum likelihood estimation is used to optimize the hyperparameters of
@@ -144,11 +145,10 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False, mul
     opts['print_time']          = False
     opts['verbose']             = False
     opts['ipopt.print_level']   = 1
-    opts['ipopt.linear_solver'] = 'ma27'
-    opts['ipopt.max_cpu_time']  = 4
-    #opts["ipopt.max_iter"]     = 100
-    #opts["ipopt.tol"]          = 1e-12
-    #opts["ipopt.hessian_approximation"] = "limited-memory"
+    opts["ipopt.tol"]          = 1e-8
+    if solver_opts is not None:
+            opts.update(solver_opts)
+
     warm_start = False
     if hyper_init is not None:
         opts['ipopt.warm_start_init_point'] = 'yes'
@@ -247,6 +247,38 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False, mul
     opt['invK'] = invK
     return opt
 
+
+def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc):
+    """ Validate GP model with new test data
+    """
+    N, Ny = Y_test.shape
+    Nx = np.size(X, 1)
+    z_s = ca.MX.sym('z', Nx)
+    gp_func = ca.Function('gp', [z_s],
+                                gp(invK, ca.MX(X), ca.MX(Y), ca.MX(hyper),
+                                   z_s.T, meanFunc=meanFunc))
+    loss = 0
+    for i in range(N):
+        y, var = gp_func(X_test[i, :])
+        loss += (Y_test[i, :] - y)**2
+    
+    loss = loss / N
+    standardized_loss = loss/ np.std(Y_test, 0)
+    
+    
+    print('\n________________________________________')
+    print('Validation of GP model ')
+    print('----------------------------------------')
+    print('Num training samples: ' + str(np.size(Y, 0)))
+    print('Num test samples: ' + str(N))
+    print('Mean squared error: ')
+    for i in range(Ny):
+        print('\t* State %d: %f' % (i + 1, loss[i]))
+    print('Standardized mean squared error:')
+    for i in range(Ny):
+        print('\t* State %d: %f' % (i + 1, standardized_loss[i]))
+    print('----------------------------------------')
+    
 
 # -----------------------------------------------------------------------------
 # Preprocesing of training data

@@ -14,56 +14,62 @@ import matplotlib.pyplot as plt
 
 # Specifications
 # Discrete Time Model
-ndstate = 4                             # Number of states
+ndstate = 6                             # Number of states
 nastate = 0                             # Number of algebraic equations
-ninput  = 2                             # Number of inputs
-dt      = 10                            # Time of one control interval 3s
+ninput  = 3                             # Number of inputs
+dt      = 0.05                          # Time of one control interval 
 
-training = True                         # True: generate training data
-optimize = False                        # Optimize hyperperameters
-sim = False                             # True: simualate and plot system
-simTime = 300                           # Simulation time in seconds
+training = True                        # True: generate training data
+sim = False                              # True: simualate and plot system
+simTime = 40*dt # 300                           # Simulation time in seconds
 
 
 # Regression data
-npoints = 20                          # Number of data points generated
-u_min = np.array([0., 0.])             # lower bound of control inputs [ml/s]
-u_max = np.array([60., 60.])           # upper bound of control inputs [ml/s]
-x_min = np.array([0., 0., 0., 0.])     # lower bound of expected minimum state [cm]
-x_max = np.array([30., 30., 30., 30])  # upper bound of expected minimum state [cm]
-R = np.diag([1e-3, 1e-3, 1e-3, 1e-3])  # noise covariance matrix
+npoints = 50                            # Number of data points generated
+u_min = np.array([-.5, -.5, -.5])       # Lower bound of control inputs
+u_max = np.array([.5, .5, .5])          # Upper bound of control inputs
+x_min = np.array([-.5, 10, -2.,
+                  -2., -.5, 0.])       # Lower bound of expected minimum state 
+x_max = np.array([.5, 20, 2.,
+                  2., .5, 10.])        # Upper bound of expected minimum state
+R     = np.diag([1e-3, 1e-3, 1e-3, 
+                 1e-3, 1e-3, 1e-3])     # Noise covariance matrix
 
 
 def integrate_system(ndstate, nastate, u, t0, tf, x0):
 
-    # Model Parameters (Raff, Tobias et al., 2006)
-    g = 981
-    a1 = 0.233
-    a2 = 0.242
-    a3 = 0.127
-    a4 = 0.127
-    A1 = 50.27
-    A2 = 50.27
-    A3 = 28.27
-    A4 = 28.27
-    gamma1 = 0.4
-    gamma2 = 0.4
+    # Model Parameters (Gao et al., 2014)
+    g   = 9.18                          # Gravity [m/s^2]
+    m   = 2050                          # Vehicle mass [kg]
+    Iz  = 3344                          # Yaw inertia [kg*m2]
+    C   = 65000                         # Tyre corning stiffness [N]
+    mu  = 0.5                           # Tyre friction coefficient
+    l   = 1                             # Vehicle length
+    lf  = 0.5                           # Distance from CG to the front tyre
+    lr  = l - lf                        # Distance from CG to the rear tyre
+    Fzf = lr * m * g / (2 * l)          # Vertical load on front wheels
+    Fzr = lf * m * g / (2 * l)          # Vertical load on rear wheels
+    p   = Iz / (m * lr)
+
+    # Road tangent rate
+    psi_d = 0
 
     # Differential states
-    xd = ca.SX.sym("xd", ndstate)  # vector of states [h1,h2,h3,h4]
+    x = ca.SX.sym("xd", ndstate)  # vector of states 
 
     # Initial conditions
     xDi = x0
 
     ode = ca.vertcat(
-        -a1 / A1 * ca.sqrt(2 * g * xd[0]) + a3 / A1 
-        * ca.sqrt(2 * g * xd[2]) + gamma1 / A1 * u[0],
-        -a2 / A2 * ca.sqrt(2 * g * xd[1]) + a4 / A2 
-        * ca.sqrt(2 * g * xd[3]) + gamma2 / A2 * u[1],
-        -a3 / A3 * ca.sqrt(2 * g * xd[2]) + (1 - gamma2) / A3 * u[1],
-        -a4 / A4 * ca.sqrt(2 * g * xd[3]) + (1 - gamma1) / A4 * u[0])
+        2 * mu * Fzf / (m * lr) * u[1] - x[2] * x[1],
+        2 * mu  / m * (Fzf * u[0] + Fzr * u[2]) + x[2] * x[0] - p * x[2]**2,
+        2 * lf * mu * Fzf / Iz * u[1] + 
+            2 * lr * C / (Iz * x[1]) * ((lr + p) * x[2] - x[0]),
+        x[2] - psi_d,
+        x[0] + x[1] * x[3],
+        x[1])
 
-    dae = {'x': xd, 'ode': ode}
+    dae = {'x': x, 'ode': ode}
 
     # Create a DAE system solver
     opts = {}
@@ -105,10 +111,7 @@ def sim_system(x0, u, simTime, dt, noise=False):
             Y_sim[t, :] = x + np.random.multivariate_normal(np.zeros((ndstate)), R)
         else:
             Y_sim[t, :] = x
-        # Limit values to above 1e-8 to avvoid to avvoid numerical errors
-        if np.any(Y_sim < 0):
-            print('Negative values!')
-            Y_sim = Y_sim.clip(min=1e-8)
+
     return Y_sim
 
 
@@ -158,30 +161,26 @@ def main():
     # -----------------------------------------------------------------------------
     if training is True:
         X_mat, Y_mat = generate_training_data()
-        np.savetxt('../data/' + 'X_matrix_tank', X_mat)    # Save input matrix  as text file
-        np.savetxt('../data/' + 'Y_matrix_tank', Y_mat)    # Save output matrix as text file
-
-        X_mat, Y_mat = generate_training_data()
-        np.savetxt('../data/' + 'X_matrix_test_tank', X_mat)    # Save input matrix  as text file
-        np.savetxt('../data/' + 'Y_matrix_test_tank', Y_mat)    # Save output matrix as text file
+        np.savetxt('../data/' + 'X_matrix_car', X_mat)    # Save input matrix  as text file
+        np.savetxt('../data/' + 'Y_matrix_car', Y_mat)    # Save output matrix as text file
 
     if sim is True:
         # Plot simulation
-        simPoints = simTime / dt
-        u_matrix = np.zeros((simPoints, 2))
-        u_matrix[:, 0] = 50
-        u_matrix[:, 1] = 50
-        x0 = np.array([10, 20, 30, 40])
+        simPoints = int(simTime / dt)
+        u_matrix = np.zeros((simPoints, 3))
+        u_matrix[:, 0] = 0.
+        u_matrix[:, 1] = 0.
+        u_matrix[:, 2] = 0.
+        x0 = np.array([0, 10, 0, 0, 0 , 0])
 
-        t = np.linspace(0.0, 300.0, 100)
+        t = np.linspace(0.0, simTime, simPoints)
         Y_sim = sim_system(x0, u_matrix, simTime, dt)
         plt.figure()
         plt.clf()
-        for i in range(4):
-            plt.subplot(2, 2, i + 1)
-            plt.title('A tale of 2 subplots')
+        for i in range(6):
+            plt.subplot(3, 2, i + 1)
             plt.plot(t, Y_sim[:, i], 'b-')
-            plt.ylabel('X')
+            plt.ylabel('X' + str(i + 1))
         plt.show()
 
 

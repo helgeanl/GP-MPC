@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Gaussian Process
+Model Predictive Control with Gaussian Process
 @author: Helge-André Langåker
 """
 from __future__ import absolute_import
@@ -10,21 +10,65 @@ from __future__ import print_function
 from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
 import time
-from scipy.stats import norm
 import numpy as np
 import matplotlib.pyplot as plt
 import casadi as ca
 import casadi.tools as ctools
+from scipy.stats import norm
 #from matplotlib.font_manager import FontProperties
 from . gp_functions import gp_taylor_approx, gp
 
 
 class MPC:
     def __init__(self, X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
-                Q=None, P=None, R_u=None, R_du=None,
+                Q=None, P=None, R=None, S=None,
                 u0=None, ulb=None, uub=None, xlb=None, xub=None, terminal_constraint=None,
                 feedback=True, method='TA', log=False, meanFunc='zero',
-                costFunc='quad'):
+                costFunc='quad', solver_opts=None, simulator=None,test=None):
+        #TODO: Remove 'test' and 'log'
+        """ Initialize and build the MPC solver
+        
+        # Arguments:
+            X: Training data matrix with inputs of size (N x Nx), where Nx is the number
+                of inputs to the GP and N number of training points.
+            Y: Training data matrix with outpyts of size (N x Ny), with Ny number of outputs.
+            x0: Initial state (t0)
+            x_sp: State set point
+            invK: Array with the inverse covariance matrices of size (Ny x N x N),
+                with Ny number of outputs from the GP.
+            hyper: Array with hyperparameters [ell_1 .. ell_Nx sf sn].
+            horizon: Horizon of control inputs
+            sim_time: Simulation time
+            dt: Sampling time
+        # Optional Argumants:
+            Q: State penalty matrix
+            P: Termial penalty matrix
+            R: Input penalty matrix
+            S: Input rate of change penalty matrix
+            u0: Initial input (t0-1)
+            ulb: Lower boundry input
+            uub: Upper boundry input
+            xlb: Lower boundry state
+            xub: Upper boundry state
+            terminal_constraint: Terminal condition on the state
+                    if None: No terminal constraint is used
+                    if zero: Terminal state is equal to zero
+                    if nonzero: Terminal state is bounded within the constraint 
+            feedback:
+            method: Method of propagating the uncertainty
+                    Possible options:
+                        'TA': Second order Taylor approximation
+                        'ME': Mean equivalent approximation
+            log: 
+            meanFunc: 
+            costFunc: Cost function to use in the objective
+                'quad': Expected valaue of Quadratic Cost
+                'sat':  Expected value of Saturating cost
+            solver_opts: Additional options to pass to the NLP solver
+                    e.g.: solver_opts['print_time'] = False
+                          solver_opts['ipopt.tol'] = 1e-8
+        """
+        
         
         build_solver_time = -time.time()
         self.__Nsim = int(sim_time / dt) 
@@ -42,10 +86,10 @@ class MPC:
             P = np.eye(Ny)
         if Q is None:
             Q = np.eye(Ny)
-        if R_u is None:
-            R_u = np.eye(Nu) * 0.001
-        if R_du is None:
-            R_du = np.eye(Nu) * 0.001
+        if R is None:
+            R = np.eye(Nu) * 0.001
+        if S is None:
+            S = np.eye(Nu) * 0.001
     
         percentile = 0.95
         quantile_x = np.ones(Ny) * norm.ppf(percentile)
@@ -62,8 +106,7 @@ class MPC:
             self.__u0 = u0
 
         # Initialize state variance with the noise variance
-        sn2 = hyper[:, Nx + 1**2]
-        self.__variance_0 = sn2
+        self.__variance_0 = hyper[:, Nx + 1]
         mean_ref = x_sp
         self.__x_sp = x_sp
         
@@ -71,6 +114,7 @@ class MPC:
         mean_s = ca.MX.sym('mean', Ny)
         mean_ref_s = ca.MX.sym('mean_ref', Ny)
         covar_x_s = ca.MX.sym('covar', Ny, Ny)
+        covar_s = ca.MX.sym('covar', Nx, Nx)
         v_s = ca.MX.sym('v', Nu)
         u_s = ca.MX.sym('u', Nu)
         z_s = ca.vertcat(mean_s, u_s)
@@ -78,34 +122,40 @@ class MPC:
         
         K_s = ca.MX.sym('K', Nu, Ny)
     
+        # Select wich GP function to use
         if method is 'ME':
-            gp_func = ca.Function('gp_mean', [z_s, covar_x_s],
+            gp_func = ca.Function('gp_mean', [z_s, covar_s],
                                 gp(invK, ca.MX(X), ca.MX(Y), ca.MX(hyper),
                                    z_s.T, meanFunc=meanFunc, log=log))
         elif method is 'TA':
-            gp_func = ca.Function('gp_taylor_approx', [z_s, covar_x_s],
+            gp_func = ca.Function('gp_taylor_approx', [z_s, covar_s],
                                 gp_taylor_approx(invK, ca.MX(X), ca.MX(Y),
-                                                 ca.MX(hyper), z_s.T, covar_x_s,
+                                                 ca.MX(hyper), z_s.T, covar_s,
                                                  meanFunc=meanFunc, diag=True, log=log))
         elif method is 'EM':
-            gp_func = ca.Function('gp_taylor_approx', [z_s, covar_x_s],
+            gp_func = ca.Function('gp_taylor_approx', [z_s, covar_s],
                                 gp_taylor_approx(invK, ca.MX(X), ca.MX(Y),
-                                                 ca.MX(hyper), z_s.T, covar_x_s,
+                                                 ca.MX(hyper), z_s.T, covar_s,
                                                  diag=True))
         else:
             raise NameError('No GP method called: ' + method)
+    
+        #TODO: Remove after test
+        x_sx = ca.SX.sym('x', Ny)
+        u_sx = ca.SX.sym('u', Nu)
+#        Ik = ca.Function('Ik', [x_sx, u_sx], [test(x_sx, u_sx, self.__dt)])
     
         # Define stage cost and terminal cost
         if costFunc is 'quad':
             l_func = ca.Function('l', [mean_s, covar_x_s, u_s, delta_u_s, K_s],
                                [self.__cost_l(mean_s, mean_ref_s, covar_x_s, u_s, delta_u_s,
-                                           ca.MX(Q), ca.MX(R_u), ca.MX(R_du), K_s)])
+                                           ca.MX(Q), ca.MX(R), ca.MX(S), K_s)])
             lf_func = ca.Function('lf', [mean_s, covar_x_s],
                                    [self.__cost_lf(mean_s, mean_ref_s, covar_x_s,  ca.MX(P))])
         elif costFunc is 'sat':
             l_func = ca.Function('l', [mean_s, covar_x_s, u_s, delta_u_s, K_s],
                                [self.__cost_saturation_l(mean_s, mean_ref_s, covar_x_s, u_s, delta_u_s,
-                                           ca.MX(Q), ca.MX(R_u), ca.MX(R_du), K_s)])
+                                           ca.MX(Q), ca.MX(R), ca.MX(S), K_s)])
             lf_func = ca.Function('lf', [mean_s, covar_x_s],
                                    [self.__cost_saturation_lf(mean_s, mean_ref_s, covar_x_s,  ca.MX(P))])
         else:
@@ -116,21 +166,35 @@ class MPC:
             u_func = ca.Function('u', [mean_s, v_s, K_s],
                                  [ca.mtimes(K_s, mean_s) + v_s])
         else:
-            u_func = ca.Function('u', [mean_s, v_s, K_s], [v_s])
-        
+            u_func = ca.Function('u', [mean_s, v_s, K_s], [v_s])        
         self.__u_func = u_func
-    #    covar_u  = ca.Function('covar_u', [covar_x_s, K_s],
-    #                       [K_s @ covar_x_s @ K_s.T])
-    
+        
+        
+        #TODO: Clean this up
+        dx_s = ca.SX.sym('dx')
+        dy_s = ca.SX.sym('dy')
+        dpsi_s = ca.SX.sym('dpsi')
+        delta_f_s = ca.SX.sym('delta_f') 
+        lf  = 2.0 
+        lr  = 2.0
+        slip_min = -4 * np.pi / 180
+        slip_max = 4 * np.pi / 180
+        slip_f = ca.Function('slip_f', [dx_s, dy_s, dpsi_s, delta_f_s],
+                             [(dy_s + lf*dpsi_s) / dx_s - delta_f_s])
+        slip_r = ca.Function('slip_r', [dx_s, dy_s, dpsi_s],
+                             [(dy_s - lr*dpsi_s) / dx_s])
+        
+        
         # Create variables struct
         var = ctools.struct_symMX([(
                 ctools.entry('mean', shape=(Ny,), repeat=Nt + 1),
                 ctools.entry('covariance', shape=(Ny * Ny,), repeat=Nt + 1),
                 ctools.entry('v', shape=(Nu,), repeat=Nt),
                 ctools.entry('K', shape=(Nu*Ny,), repeat=Nt),
+                ctools.entry('eps', repeat=Nt),
         )])
         self.__var = var
-        num_var = var.size
+        self.__num_var = var.size
         
         # Create parameter symbols
         mean_0_s = ca.MX.sym('mean_0', Ny)
@@ -146,6 +210,8 @@ class MPC:
         # Adjust boundries
         for t in range(Nt):
             self.__varlb['covariance', t] = np.full((Ny * Ny,), 0) 
+            self.__varlb['eps', t] = 0
+            self.__varlb['mean', t] = np.full((Ny,), 1)
             if not feedback:
                 self.__varlb['K', t] = np.full((Nu * Ny,), 0)
                 self.__varub['K', t] = np.full((Nu * Ny,), 0)
@@ -161,21 +227,33 @@ class MPC:
         con_eq.append(var['mean', 0] - mean_0_s)
         con_eq.append(var['covariance', 0] - covariance_0_s)
         u_past = u_0_s
-    
+        
+        #TODO: Add slack constraint or remove
+        lam = 14000 
+
+        covar_t = ca.MX(Nx, Nx)
+
         for t in range(Nt):
             # Input to GP
             K_t = var['K', t].reshape((Nu, Ny))
             u_t = u_func(var['mean', t], var['v', t], K_t)
             z = ca.vertcat(var['mean', t], u_t)
             covar_x_t = var['covariance', t].reshape((Ny, Ny))
-    
+            covar_t[:Ny, :Ny] = covar_x_t
+            #TODO: Fix this
             # Calculate next step
-            mean_next, covar_x_next = gp_func(z, covar_x_t)
-    
+            mean_next, covar_x_next = gp_func(z, covar_t)
+            
+            #TODO: Remove after test
+            #***
+#            mean_next = Ik(var['mean', t], u_t)
+#            covar_x_next = ca.MX(Ny, Ny)
+            #****
+            
             # Continuity constraints
             con_eq.append(var['mean', t + 1] - mean_next)
             con_eq.append(var['covariance', t + 1] - covar_x_next.reshape((Ny * Ny,1)))
-    
+            
             # Chance state constraints
             con_ineq.append(mean_next + quantile_x * ca.sqrt(ca.diag(covar_x_next) ))
             con_ineq_ub.append(xub)
@@ -183,16 +261,48 @@ class MPC:
             con_ineq.append(mean_next - quantile_x * ca.sqrt(ca.diag(covar_x_next)))
             con_ineq_ub.append(np.full((Ny,), ca.inf))
             con_ineq_lb.append(xlb)
+            
+            con_ineq.append(var['mean', t ])
+            con_ineq_ub.append(xub)
+            con_ineq_lb.append(xlb)
     
             # Input constraints
             con_ineq.append(u_t)
             con_ineq_ub.extend(uub)
             con_ineq_lb.append(ulb)
-    
+            
+            # Slip angle constraint
+#            dx = var['mean', t, 0]
+#            dy = var['mean', t, 1]
+#            dpsi = var['mean', t, 2]
+#            eps = var['eps', t]
+#            delta_f = u_t[2]
+#            lf  = 2.0 
+#            lr  = 2.0
+#            slip_min = -10 * np.pi / 180
+#            slip_max = 10 * np.pi / 180
+
+#            
+#            con_ineq.append(slip_f(var['mean', t, 0], var['mean', t, 1], var['mean', t, 2], delta_f) - slip_max)
+#            con_ineq_ub.append(0)
+#            con_ineq_lb.append(-ca.inf)
+#            
+#            con_ineq.append(slip_min - slip_f(var['mean', t, 0], var['mean', t, 1], var['mean', t, 2], delta_f))
+#            con_ineq_ub.append(0)
+#            con_ineq_lb.append(-ca.inf)
+#            
+#            con_ineq.append(slip_r(var['mean', t, 0], var['mean', t, 1], var['mean', t, 2]) - slip_max)
+#            con_ineq_ub.append(0)
+#            con_ineq_lb.append(-ca.inf)
+#            
+#            con_ineq.append(slip_min - slip_r(var['mean', t, 0], var['mean', t, 1], var['mean', t, 2]))
+#            con_ineq_ub.append(0)
+#            con_ineq_lb.append(-ca.inf)
+#            
+            # Objective function
             u_delta = u_t - u_past
-            obj += l_func(var['mean', t], covar_x_t, u_t, u_delta, K_t)
+            obj += l_func(var['mean', t], covar_x_t, u_t, u_delta, K_t) #+ lam*var['eps', t]
             u_t = u_past
-            covar_x_t = covar_x_next
         obj += lf_func(var['mean', Nt], var['covariance', Nt].reshape((Ny, Ny)))
     
         num_eq_con = ca.vertcat(*con_eq).size1()
@@ -214,9 +324,6 @@ class MPC:
         nlp = dict(x=var, f=obj, g=con, p=param_s)
         opts = {}
         opts['ipopt.print_level'] = 0
-        opts['ipopt.linear_solver'] = 'ma27'
-        opts['ipopt.max_cpu_time'] = 4
-        #opts['ipopt.max_iter'] = 10
         opts['ipopt.mu_init'] = 0.01
         opts['ipopt.tol'] = 1e-8
         opts['ipopt.warm_start_init_point'] = 'yes'
@@ -224,7 +331,8 @@ class MPC:
         opts['print_time'] = False
         opts['verbose'] = False
         opts['expand'] = True
-    #    opts['jit'] = True
+        if solver_opts is not None:
+            opts.update(solver_opts)
         self.__solver = ca.nlpsol('solver', 'ipopt', nlp, opts)
     
         # Simulate
@@ -235,50 +343,65 @@ class MPC:
         self.__u = np.zeros((self.__Nsim, Nu))
 
     
-        # Initial guess of the warm start each variables
-        self.__lam_x0 = np.zeros(num_var)
+        # Initial guess of the warm start variables
+        self.__lam_x0 = np.zeros(self.__num_var)
         self.__lam_g0 = 0
         
+        # First prediction used in the NLP, used in plot later
         self.__var_prediction = np.zeros((Nt + 1, Ny))
         self.__mean_prediction = np.zeros((Nt + 1, Ny))
         
         build_solver_time += time.time()
         print('\n________________________________________')
         print('# Time to build mpc solver: %f sec' % build_solver_time)
-        print('# Number of variables: %d' % num_var)
+        print('# Number of variables: %d' % self.__num_var)
         print('# Number of equality constraints: %d' % num_eq_con)
         print('# Number of inequality constraints: %d' % num_ineq_con)
         print('----------------------------------------')
         
         
     def solve(self, simulator, sim_time=None, x0=None, u0=None, x_sp=None):
+        """ Solve the optimal control problem
+        
+        # Arguments:
+            simulator: Casadi integrator with the system DAE/ODE
+            sim_time: Simulation length
+            x0: Initial state
+            u0: Initial input
+            x_sp: State set point
+        
+        # Returns:
+            mean: Simulated output using the optimal control inputs
+            u: Optimal control inputs
+        """
 
         Nt = self.__Nt
         Ny = self.__Ny
-        Nx = self.__Nx
         Nu = self.__Nu
         dt = self.__dt
 
         # Initial state
         if x0 is not None:
             self.__x0 = x0
-            self.__mean[0, :] = self.__x0
         if u0 is not None:
             self.__u0 = u0
-            self.__u[0, :] = self.__u0
         if x_sp is not None:
             self.__x_sp = x_sp
 
         if sim_time is not None:
             self.__Nsim = int(sim_time / dt)
-            self.__mean = np.zeros((self.__Nsim + 1, Ny))
-            self.__mean[0, :] = self.__x0
-            self.__mean[0, :] = self.__x0
-            self.__covariance = np.zeros((self.__Nsim + 1, Ny, Ny))
-            self.__covariance[0] = np.diag(self.__variance_0)
 
-            self.__u = np.zeros((self.__Nsim, Nu))
-            self.__u[0, :] = self.__u0
+        self.__mean = np.zeros((self.__Nsim + 1, Ny))
+        self.__mean[0, :] = self.__x0
+        self.__mean[0, :] = self.__x0
+        self.__covariance = np.zeros((self.__Nsim + 1, Ny, Ny))
+        self.__covariance[0] = np.diag(self.__variance_0)
+        self.__u = np.zeros((self.__Nsim, Nu))
+        self.__u[0, :] = self.__u0
+        
+        # Initial guess of the warm start variables
+        self.__lam_x0 = np.zeros(self.__num_var)
+        self.__lam_g0 = 0
         
         print('\nSolving MPC with %d step horizon' % Nt)
         for t in range(self.__Nsim):
@@ -301,14 +424,21 @@ class MPC:
             sol = self.__solver(**args)
             status = self.__solver.stats()['return_status']
             optvar = self.__var(sol['x'])
+            self.optvar=self.__var(sol['x'])
             self.__var_init = optvar
             self.__lam_x0 = sol['lam_x']
             self.__lam_g0 = sol['lam_g']
             solve_time += time.time()
-    
+            # Print status
+            print("* t=%d: %s - %f sec" % (t * self.__dt, status, solve_time))
+            print(self.__mean[t,:])
+            print(self.__u[t,:])
+            
+            
             if t == 0:
                  for i in range(Nt + 1):
                      cov = optvar['covariance', i, :].reshape((Ny, Ny))
+                     
                      self.__var_prediction[i, :] = np.array(ca.diag(cov)).flatten()
                      self.__mean_prediction[i, :] = np.array(optvar['mean', i]).flatten()
     
@@ -317,12 +447,11 @@ class MPC:
             self.__u[t, :] = np.array(self.__u_func(self.__mean[t, :], v, K)).flatten()
             self.__covariance[t + 1, :] = np.array(optvar['covariance', -1, :].reshape((Ny, Ny)))
             
-            # Print status
-            print("* t=%d: %s - %f sec" % (t * self.__dt, status, solve_time))
-    
+            print('u')
+            print(self.__u[t,:])
             # Simulate the next step
             try:
-                self.__mean[t + 1, :] = simulator(self.__mean[t, :], self.__u[t, :].reshape((1, 2)),
+                self.__mean[t + 1, :] = simulator(self.__mean[t, :], self.__u[t, :].reshape((1, Nu)),
                                     dt, dt, noise=True)
             except RuntimeError:
                 print('********************************')
@@ -330,7 +459,7 @@ class MPC:
                 print('********************************')
                 self.__u = self.__u.clip(min=1e-6)
                 self.__mean = self.__mean.clip(min=1e-6)
-                self.__mean[t + 1, :] = simulator(self.__mean[t, :], self.__u[t, :].reshape((1, 2)),
+                self.__mean[t + 1, :] = simulator(self.__mean[t, :], self.__u[t, :].reshape((1, Nu)),
                                     dt, dt, noise=True)
         return self.__mean, self.__u
         
@@ -367,11 +496,11 @@ class MPC:
         return cost_x(x - x_ref, P, covar_x)
     
     
-    def __cost_saturation_l(self, x, x_ref, covar_x, u, delta_u, Q, R_u, R_du, K):
+    def __cost_saturation_l(self, x, x_ref, covar_x, u, delta_u, Q, R, S, K):
         """ Stage Cost function: Expected Value of Saturating Cost
         """
         Nx = ca.MX.size1(Q)
-        Nu = ca.MX.size1(R_u)
+        Nu = ca.MX.size1(R)
     
         # Create symbols
         Q_s = ca.SX.sym('Q', Nx, Nx)
@@ -380,7 +509,7 @@ class MPC:
         x_s = ca.SX.sym('x', Nx)
         u_s = ca.SX.sym('x', Nu)
         covar_x_s = ca.SX.sym('covar_z', Nx, Nx)
-        covar_u_s = ca.SX.sym('covar_u', ca.MX.size(R_u))
+        covar_u_s = ca.SX.sym('covar_u', ca.MX.size(R))
     
         covar_u  = ca.Function('covar_u', [covar_x_s, K_s],
                                [K_s @ covar_x_s @ K_s.T])
@@ -395,19 +524,19 @@ class MPC:
                            [1 - ca.exp(-(u_s.T @ ca.solve(Z_u.T, R_s.T).T @ u_s))
                                    / ca.sqrt(ca.det(Z_u))])
     
-        return cost_x(x - x_ref, Q, covar_x)  + cost_u(u, R_u, covar_u(covar_x, K))
+        return cost_x(x - x_ref, Q, covar_x)  + cost_u(u, R, covar_u(covar_x, K))
     
     
-    def __cost_l(self, x, x_ref, covar_x, u, delta_u, Q, R_u, R_du, K, s=1):
+    def __cost_l(self, x, x_ref, covar_x, u, delta_u, Q, R, S, K, s=1):
         """ Stage cost function: Expected Value of Quadratic Cost
         """
         Q_s = ca.SX.sym('Q', ca.MX.size(Q))
-        R_s = ca.SX.sym('R', ca.MX.size(R_u))
+        R_s = ca.SX.sym('R', ca.MX.size(R))
         K_s = ca.SX.sym('K', ca.MX.size(K))
         x_s = ca.SX.sym('x', ca.MX.size(x))
         u_s = ca.SX.sym('u', ca.MX.size(u))
         covar_x_s = ca.SX.sym('covar_x', ca.MX.size(covar_x))
-        covar_u_s = ca.SX.sym('covar_u', ca.MX.size(R_u))
+        covar_u_s = ca.SX.sym('covar_u', ca.MX.size(R))
     
         sqnorm_x = ca.Function('sqnorm_x', [x_s, Q_s],
                                [ca.mtimes(x_s.T, ca.mtimes(Q_s, x_s))])
@@ -420,8 +549,8 @@ class MPC:
         trace_x  = ca.Function('trace_x', [Q_s, covar_x_s],
                                [s * ca.trace(ca.mtimes(Q_s, covar_x_s))])
     
-        return sqnorm_x(x - x_ref, Q) + sqnorm_u(u, R_u) + sqnorm_u(delta_u, R_du) \
-                + trace_x(Q, covar_x)  + trace_u(R_u, covar_u(covar_x, K))
+        return sqnorm_x(x - x_ref, Q) + sqnorm_u(u, R) + sqnorm_u(delta_u, S) \
+                + trace_x(Q, covar_x)  + trace_u(R, covar_u(covar_x, K))
     
     
     def __constraint(self, mean, covar, H, quantile):

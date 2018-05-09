@@ -10,7 +10,10 @@ from __future__ import print_function
 from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
 
+import numpy as np
 import casadi as ca
+import matplotlib.pyplot as plt
+from matplotlib.font_manager import FontProperties
 
 
 def covSEard(x, z, ell, sf2):
@@ -20,13 +23,12 @@ def covSEard(x, z, ell, sf2):
 
 
 
-
 def get_mean_function(hyper, X, func='zero'):
     """ Get mean function
                 'zero':       m = 0
                 'const':      m = a
                 'linear':     m(x) = aT*x + b
-                'polynomial': m(x) = xT*diag(a)*x + bT*x + c
+                'polynomial': m(x) = aT*x^2 + bT*x + c
     """
 
     N, Nx = X.shape
@@ -70,7 +72,7 @@ def gp(invK, X, Y, hyper, inputmean,  meanFunc='zero', log=False):
         X: Training data matrix with inputs of size (N x Nx), with Nx number of
             inputs to the GP.
         Y: Training data matrix with outpyts of size (N x Ny).
-        hyper: Array with hyperparameters [ell_1 .. ell_Nx sf sn].
+        hyper: Array with hyperparame|ters [ell_1 .. ell_Nx sf sn].
         inputmean: Input to the GP of size (1 x Nx)
 
     # Returns
@@ -81,7 +83,7 @@ def gp(invK, X, Y, hyper, inputmean,  meanFunc='zero', log=False):
         X = ca.log(X)
         Y = ca.log(Y)
         inputmean = ca.log(inputmean)
-
+    
     Ny = len(invK)
     N, Nx = ca.MX.size(X)
 
@@ -210,7 +212,8 @@ def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputcovar,
 
         mean_mat = ca.mtimes(d_mean, d_mean.T)
         covar_temp[0, 0] = inputcovar[a, a]
-        covariance[a, a] = var[a] + ca.trace(ca.mtimes(covar_temp, .5 * dd_var + mean_mat))
+        covariance[a, a] = var[a] + ca.trace(ca.mtimes(covar_temp, .5 
+                                         * dd_var + mean_mat))
 
     return [mean, covariance]
 
@@ -230,7 +233,7 @@ def gp_exact_moment(invK, X, Y, hyper, inputmean, inputcov):
         Y: Training data matrix with outpyts of size (N x Ny).
         hyper: Array with hyperparameters [ell_1 .. ell_Nx sf sn].
         inputmean: Mean from the last GP iteration of size (1 x Nx)
-        inputcov: Covariance matrix from the last GP iteration of size (Ny x Ny)
+        inputcov: Covariance matrix from the last GP iteration of size (Nx x Nx)
 
     # Returns
         mean: Array of the output mean of size (Ny x 1).
@@ -255,9 +258,11 @@ def gp_exact_moment(invK, X, Y, hyper, inputmean, inputcov):
         beta[:, a] = ca.mtimes(invK[a], Y[:, a])
         iLambda   = ca.diag(ca.exp(-2 * hyper[a, :Nx]))
         R  = inputcov + ca.diag(ca.exp(2 * hyper[a, :Nx]))
-        iR = ca.mtimes(iLambda, (ca.MX.eye(Nx) - ca.solve((ca.MX.eye(Nx) + ca.mtimes(inputcov, iLambda)), (ca.mtimes(inputcov, iLambda)))))
+        iR = ca.mtimes(iLambda, (ca.MX.eye(Nx) - ca.solve((ca.MX.eye(Nx) 
+                + ca.mtimes(inputcov, iLambda)), (ca.mtimes(inputcov, iLambda)))))
         T  = ca.mtimes(v, iR)
-        c  = ca.exp(2 * hyper[a, Nx]) / ca.sqrt(determinant(R)) * ca.exp(ca.sum2(hyper[a, :Nx]))
+        c  = ca.exp(2 * hyper[a, Nx]) / ca.sqrt(determinant(R)) \
+                * ca.exp(ca.sum2(hyper[a, :Nx]))
         q2 = c * ca.exp(-ca.sum2(T * v) * 0.5)
         qb = q2 * beta[:, a]
         mean[a] = ca.sum1(qb)
@@ -269,10 +274,13 @@ def gp_exact_moment(invK, X, Y, hyper, inputmean, inputcov):
     for a in range(Ny):
         ii = v / ca.repmat(ca.exp(2 * hyper[a, :Nx]), N, 1)
         for b in range(a + 1):
-            R = ca.mtimes(inputcov, ca.diag(ca.exp(-2 * hyper[a, :Nx]) + ca.exp(-2 * hyper[b, :Nx]))) + ca.MX.eye(Nx)
+            R = ca.mtimes(inputcov, ca.diag(ca.exp(-2 * hyper[a, :Nx]) 
+                + ca.exp(-2 * hyper[b, :Nx]))) + ca.MX.eye(Nx)
             t = 1.0 / ca.sqrt(determinant(R))
             ij = v / ca.repmat(ca.exp(2 * hyper[b, :Nx]), N, 1)
-            Q = ca.exp(ca.repmat(log_k[:, a], 1, N) + ca.repmat(ca.transpose(log_k[:, b]), N, 1) + maha(ii, -ij, ca.solve(R, inputcov * 0.5), N))
+            Q = ca.exp(ca.repmat(log_k[:, a], 1, N) 
+                + ca.repmat(ca.transpose(log_k[:, b]), N, 1) 
+                + maha(ii, -ij, ca.solve(R, inputcov * 0.5), N))
             A = ca.mtimes(beta[:, a], ca.transpose(beta[:, b]))
             if b == a:
                 A = A - invK[a]
@@ -289,5 +297,128 @@ def maha(a1, b1, Q1, N):
     """Calculate the Mahalanobis distance"""
     aQ = ca.mtimes(a1, Q1)
     bQ = ca.mtimes(b1, Q1)
-    K1  = ca.repmat(ca.sum2(aQ * a1), 1, N) + ca.repmat(ca.transpose(ca.sum2(bQ * b1)), N, 1) - 2 * ca.mtimes(aQ, ca.transpose(b1))
+    K1  = ca.repmat(ca.sum2(aQ * a1), 1, N) \
+            + ca.repmat(ca.transpose(ca.sum2(bQ * b1)), N, 1) \
+            - 2 * ca.mtimes(aQ, ca.transpose(b1))
     return K1
+
+
+
+def predict(X, Y, invK, hyper, x0, u, sim_system):
+
+    # Predict future
+    N = X.shape[0]
+    Ny = len(invK)
+    Nx = X.shape[1]
+    Nu = Nx - Ny
+
+    initVar = hyper[:, Nx + 1]**2
+    covar = ca.SX.eye(Nx) * 1e-5
+    dt = 30
+    simTime = 150.0
+    Nt = int(simTime / dt)
+
+    mu_EM = np.zeros((Nt, Ny))
+    var_EM = np.zeros((Nt, Ny))
+    
+
+    mu_ME = np.zeros((Nt, Ny))
+    var_ME = np.zeros((Nt, Ny))
+
+    mu_TA = np.zeros((Nt, Ny))
+    var_TA = np.zeros((Nt, Ny))
+
+    Y_s = ca.MX.sym('Y', N, Ny)
+    X_s = ca.MX.sym('X', N, Nx)
+    hyp_s = ca.MX.sym('hyp', hyper.shape)
+    z_s = ca.MX.sym('z', 1, Nx)
+    cov_s = ca.MX.sym('cov', Nx, Nx)
+
+
+    gp_EM = ca.Function('gp', [X_s, Y_s, hyp_s, z_s, cov_s],
+                        gp_exact_moment(invK, X_s, Y_s, hyp_s, z_s, cov_s))
+    gp_TA = ca.Function('gp_taylor_approx', [X_s, Y_s, hyp_s, z_s, cov_s],
+                        gp_taylor_approx(invK, X_s, Y_s, hyp_s, z_s, cov_s))
+    gp_simple = ca.Function('gp_simple', [X_s, Y_s, hyp_s, z_s], 
+                            gp(invK, X_s, Y_s, hyp_s, z_s, meanFunc='zero'))
+
+    mu = x0
+    covar[:Ny, :Ny] = ca.diag(initVar)
+    for t in range(Nt):
+        z = ca.vertcat(mu, u[t, :]).T
+        mu, covar_x = gp_EM(X, Y, hyper, z, covar)
+        mu, covar_x = mu.full(), covar.full()
+        mu.shape, covar_x.shape = (Ny), (Ny, Ny)
+        mu_EM[t, :], var_EM[t, :] = mu, np.diag(covar_x)
+        covar[:Ny, :Ny] = covar_x
+
+    mu = x0
+    var = initVar
+    covar[:Ny, :Ny] = ca.diag(initVar)
+    for t in range(Nt):
+        z = ca.vertcat(mu, u[t, :]).T
+        mu, covar_x = gp_TA(X, Y, hyper, z, var)
+        mu, covar_x = mu.full(), covar_x.full()
+        mu.shape, covar.shape = (Ny), (Ny, Ny)
+        mu_TA[t, :], var_TA[t, :] = mu, np.diag(covar_x)
+        covar[:Ny, :Ny] = covar_x
+
+    mu = x0
+    for t in range(Nt):
+        z = ca.vertcat(mu, u[t, :]).T
+        mu, covar_x = gp_simple(X, Y, hyper, z)
+        mu, covar_x = mu.full(), covar_x.full()
+        mu.shape, covar_x.shape = (Ny), (Ny, Ny)
+        mu_ME[t, :], var_ME[t, :] = mu, np.diag(covar_x)
+
+    t = np.linspace(0.0, simTime, Nt)
+    Y_sim = sim_system(x0, u, simTime, dt)
+
+
+    plt.figure()
+    fontP = FontProperties()
+    fontP.set_size('small')
+    for i in range(Ny):
+        plt.subplot(2, 2, i + 1)
+        mu_EM_i = mu_EM[:, i]
+        mu_TA_i = mu_TA[:, i]
+        mu_ME_i = mu_ME[:, i]
+
+        sd_EM_i = np.sqrt(var_EM[:, i])
+        sd_TA_i = np.sqrt(var_TA[:, i])
+        sd_ME_i = np.sqrt(var_ME[:, i])
+
+        plt.gca().fill_between(t.flat, mu_EM_i - 2 * sd_EM_i, mu_EM_i +
+               2 * sd_EM_i, color="#555555", label='95% conf interval EM')
+        plt.gca().fill_between(t.flat, mu_TA_i - 2 * sd_TA_i, mu_TA_i +
+               2 * sd_TA_i, color="#FFFaaa", label='95% conf interval TA')
+        plt.gca().fill_between(t.flat, mu_ME_i - 2 * sd_ME_i, mu_ME_i +
+               2 * sd_ME_i, color="#bbbbbb", label='95% conf interval ME')
+
+        #plt.errorbar(t, mu_EM_i, yerr=2 * sd_EM_i, label='95% conf interval EM')
+        #plt.errorbar(t, mu_TA_i, yerr=2 * sd_TA_i, label='95% conf interval TA')
+        #plt.errorbar(t, mu_EM_i, yerr=2 * sd_ME_i, label='95% conf interval ME')
+
+        plt.plot(t, Y_sim[:, i], 'b-', label='Simulation')
+        plt.plot(t, mu_EM_i, 'rx', label='GP Excact moment')
+        plt.plot(t, mu_TA_i, 'kx', label='GP Taylor Approx')
+        plt.plot(t, mu_ME_i, 'yx', label='GP Mean Equivalence')
+
+        plt.ylabel('Level in tank ' + str(i + 1) + ' [cm]')
+        plt.legend(prop=fontP)
+        plt.suptitle('Simulation and prediction', fontsize=16)
+        plt.xlabel('Time [s]')
+        #plt.ylim([0, 40])
+    plt.show()
+
+    plt.figure()
+    u_temp = np.vstack((u, u[-1, :]))
+    for i in range(Nu):
+        plt.subplot(2, 1, i + 1)
+        plt.step(t, u_temp[:, i], 'k', where='post')
+        plt.ylabel('Flow  ' + str(i + 1) + ' [ml/s]')
+        plt.suptitle('Control inputs', fontsize=16)
+        plt.xlabel('Time [s]')
+        #plt.ylim([0, 40])
+    plt.show()
+    return mu_EM, var_EM

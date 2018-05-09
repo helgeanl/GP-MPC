@@ -326,7 +326,7 @@ def mpc(X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt, simulator,
     opts = {}
     opts['ipopt.print_level'] = 0
     opts['ipopt.linear_solver'] = 'ma27'
-    opts['ipopt.max_cpu_time'] = 4
+    opts['ipopt.max_cpu_time'] = 10
     #opts['ipopt.max_iter'] = 10
     opts['ipopt.mu_init'] = 0.01
     opts['ipopt.tol'] = 1e-8
@@ -446,7 +446,7 @@ def plot_mpc(x, u, dt, x_pred=None, var_pred=None, x_sp=None, title=None,
 
     t = np.linspace(0.0, Nt_sim * dt, Nt_sim)
     u = np.vstack((u, u[-1, :]))
-    numcols = 2
+
     numrows = int(np.ceil(Nx / numcols))
 
     fig_u = plt.figure()
@@ -477,3 +477,33 @@ def plot_mpc(x, u, dt, x_pred=None, var_pred=None, x_sp=None, title=None,
         fig_x.canvas.set_window_title(title)
 
     return fig_x, fig_u
+
+
+def plot_repeats(x, dt, x_sp=None, title=None,
+             xnames=None, unames=None, time_unit = 's', numcols=2):
+
+    N_repeats, Nt_sim, Nx = x.shape
+
+    if xnames is None:
+        xnames = ['State %d' % (i + 1) for i in range(Nx)]
+
+
+    t = np.linspace(0.0, Nt_sim * dt, Nt_sim)
+
+    numrows = int(np.ceil(Nx / numcols))
+
+    fig_x = plt.figure()
+    for i in range(Nx):
+        ax = fig_x.add_subplot(numrows, numcols, i + 1)
+        for k in range(N_repeats):
+            ax.plot(t, x[k, :, i], 'b-', marker='.', linewidth=0.5)
+        if x_sp is not None:
+            ax.plot(t, x_sp[:, i], color='g', linestyle='--')
+
+        ax.set_ylabel(xnames[i])
+        ax.set_xlabel('Time [' + time_unit + ']')
+
+    if title is not None:
+        fig_x.canvas.set_window_title(title)
+
+    return fig_x
