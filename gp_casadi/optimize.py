@@ -15,7 +15,7 @@ import pyDOE
 import numpy as np
 import casadi as ca
 from scipy.spatial import distance
-from . gp_functions import get_mean_function, gp
+from .gp_functions import get_mean_function, gp
 
 # -----------------------------------------------------------------------------
 # Optimization of hyperperameters as a constrained minimization problem
@@ -82,7 +82,7 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
     return NLL(Y - m(X), alpha, log_detK)
 
 
-def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False, 
+def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
              multistart=1, solver_opts=None):
     """ Train hyperparameters
 
@@ -147,7 +147,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     opts['ipopt.print_level']   = 1
     opts["ipopt.tol"]          = 1e-8
     if solver_opts is not None:
-            opts.update(solver_opts)
+        opts.update(solver_opts)
 
     warm_start = False
     if hyper_init is not None:
@@ -265,6 +265,7 @@ def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc):
     loss = loss / N
     standardized_loss = loss/ np.std(Y_test, 0)
     
+    #TODO: Add negative log porability 
     
     print('\n________________________________________')
     print('Validation of GP model ')
@@ -278,47 +279,37 @@ def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc):
     for i in range(Ny):
         print('\t* State %d: %f' % (i + 1, standardized_loss[i]))
     print('----------------------------------------')
-    
 
-# -----------------------------------------------------------------------------
+
+"""-----------------------------------------------------------------------------
 # Preprocesing of training data
-# -----------------------------------------------------------------------------
-
-def standardize(X_original, Y_original, lb, ub):
-    # Scale input and output variables
-    X_scaled = np.zeros(X_original.shape)
-    Y_scaled = np.zeros(Y_original.shape)
-
-    # Normalize input data to [0 1]
-    for i in range(np.size(X_original, 1)):
-        X_scaled[:, i] = (X_original[:, i] - lb[i]) / (ub[i] - lb[i])
-
-    # Scale output data to a Gaussian with zero mean and unit variance
-    for i in range(np.size(Y_original, 1)):
-        Y_scaled[:, i] = (Y_original[:, i] - np.mean(Y_original[:, i])) / np.std(Y_original[:, i])
-
-    return X_scaled, Y_scaled
+-----------------------------------------------------------------------------"""
 
 
-def scale_min_max(X_original, lb, ub):
-    # Scale input and output variables
-    #X_scaled = np.zeros(X_original.shape)
+def normalize(X, lb, ub):
+    """ Normalize data between 0 and 1
+    # Arguments:
+        X: Input data (scalar/vector/matrix)
+        lb: Lower boundry (scalar/vector)
+        ub: Upper boundry (scalar/vector)
+    # Return:
+        X normalized (scalar/vector/matrix)
+    """
 
-    # Normalize input data to [0 1]
-    return (X_original - lb) / (ub - lb)
+    return (X - lb) / (ub - lb)
 
 
-def scale_min_max_inverse(X_scaled, lb, ub):
+def normalize_inverse(X_scaled, lb, ub):
     # Scale input and output variables
     # Normalize input data to [0 1]
     return X_scaled * (ub - lb) + lb
 
 
-def scale_gaussian(X_original, meanX, stdX):
+def standardize(X_original, meanX, stdX):
     # Scale input and output variables
     return (X_original - meanX) / stdX
 
 
-def scale_gaussian_inverse(X_scaled, meanX, stdX):
+def standardize_inverse(X_scaled, meanX, stdX):
     # Scale input and output variables
     return X_scaled * stdX + meanX
