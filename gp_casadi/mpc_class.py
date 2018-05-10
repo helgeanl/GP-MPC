@@ -18,10 +18,42 @@ from scipy.stats import norm
 #from matplotlib.font_manager import FontProperties
 from . gp_functions import gp_taylor_approx, gp
 
+""" Test with discrete model
+
+"""
+def ode(x, u):
+    # Model Parameters (Gao et al., 2014)
+    g   = 9.18                          # Gravity [m/s^2]
+    m   = 2050                          # Vehicle mass [kg]
+    Iz  = 3344                          # Yaw inertia [kg*m^2]
+    Cr   = 65000                        # Tyre corning stiffness [N/rad]
+    Cf   = 65000                        # Tyre corning stiffness [N/rad]
+    mu  = 0.5                           # Tyre friction coefficient
+    l   = 4.0                           # Vehicle length
+    lf  = 2.0                           # Distance from CG to the front tyre
+    lr  = l - lf                        # Distance from CG to the rear tyre
+    Fzf = lr * m * g / (2 * l)          # Vertical load on front wheels
+    Fzr = lf * m * g / (2 * l)          # Vertical load on rear wheels
+    eps = 1e-8
+
+    dxdt = [
+                1/m * (m*x[1]*x[2] + 2*mu*Fzf*u[0] + 2*Cf*u[2]**2
+                    - 2*Cf*u[2] * (x[1] + lf*x[2]) / (x[0] + eps) + 2*mu*Fzr*u[1]),
+                1/m * (-m*x[0]*x[2] + 2*mu*Fzf*u[2]*u[0]
+                    + 2*Cf*(x[1] + lf*x[2]) / (x[0] + eps) - 2*Cf*u[2]
+                    + 2*Cr*(x[1] - lf*x[2]) / (x[0] + eps)),
+                1/Iz * (2*lf*mu*Fzf*u[0]*u[2] + 2*lf*Cf*(x[1] + lf*x[2]) / (x[0] + eps)
+                    - 2*lf*Cf*u[2] - 2*lr*Cr*(x[1] - lf*x[2]) / (x[0] + eps)),
+                x[2],
+                x[0]*ca.cos(x[3]) - x[1]*ca.sin(x[3]),
+                x[0]*ca.sin(x[3]) + x[1]*ca.cos(x[3])
+            ]
+    return np.array(dxdt)
+
 
 class MPC:
     def __init__(self, X, Y, x0, x_sp, invK, hyper, horizon, sim_time, dt,
-                Q=None, P=None, R=None, S=None,
+                Q=None, P=None, R=None, S=None, C=None,
                 u0=None, ulb=None, uub=None, xlb=None, xub=None, terminal_constraint=None,
                 feedback=True, method='TA', log=False, meanFunc='zero',
                 costFunc='quad', solver_opts=None, simulator=None,test=None):
@@ -90,6 +122,9 @@ class MPC:
             R = np.eye(Nu) * 0.001
         if S is None:
             S = np.eye(Nu) * 0.001
+            
+        #TODO: Add slack constraint or remove
+        lam = 14000 
     
         percentile = 0.95
         quantile_x = np.ones(Ny) * norm.ppf(percentile)
@@ -122,7 +157,7 @@ class MPC:
         
         K_s = ca.MX.sym('K', Nu, Ny)
     
-        # Select wich GP function to use
+        """ Select wich GP function to use """
         if method is 'ME':
             gp_func = ca.Function('gp_mean', [z_s, covar_s],
                                 gp(invK, ca.MX(X), ca.MX(Y), ca.MX(hyper),
@@ -140,28 +175,28 @@ class MPC:
         else:
             raise NameError('No GP method called: ' + method)
     
-        #TODO: Remove after test
-        x_sx = ca.SX.sym('x', Ny)
-        u_sx = ca.SX.sym('u', Nu)
-#        Ik = ca.Function('Ik', [x_sx, u_sx], [test(x_sx, u_sx, self.__dt)])
+        
     
-        # Define stage cost and terminal cost
+        """ Define stage cost and terminal cost """
         if costFunc is 'quad':
             l_func = ca.Function('l', [mean_s, covar_x_s, u_s, delta_u_s, K_s],
                                [self.__cost_l(mean_s, mean_ref_s, covar_x_s, u_s, delta_u_s,
                                            ca.MX(Q), ca.MX(R), ca.MX(S), K_s)])
             lf_func = ca.Function('lf', [mean_s, covar_x_s],
-                                   [self.__cost_lf(mean_s, mean_ref_s, covar_x_s,  ca.MX(P))])
+                                   [self.__cost_lf(mean_s, mean_ref_s, 
+                                                   covar_x_s,  ca.MX(P))])
         elif costFunc is 'sat':
             l_func = ca.Function('l', [mean_s, covar_x_s, u_s, delta_u_s, K_s],
-                               [self.__cost_saturation_l(mean_s, mean_ref_s, covar_x_s, u_s, delta_u_s,
-                                           ca.MX(Q), ca.MX(R), ca.MX(S), K_s)])
+                               [self.__cost_saturation_l(mean_s, mean_ref_s, 
+                                    covar_x_s, u_s, delta_u_s, ca.MX(Q), ca.MX(R), 
+                                    ca.MX(S), K_s)])
             lf_func = ca.Function('lf', [mean_s, covar_x_s],
-                                   [self.__cost_saturation_lf(mean_s, mean_ref_s, covar_x_s,  ca.MX(P))])
+                                   [self.__cost_saturation_lf(mean_s, 
+                                        mean_ref_s, covar_x_s,  ca.MX(P))])
         else:
              raise NameError('No cost function called: ' + costFunc)
     
-        # Feedback function
+        """ Feedback function """
         if feedback:
             u_func = ca.Function('u', [mean_s, v_s, K_s],
                                  [ca.mtimes(K_s, mean_s) + v_s])
@@ -171,6 +206,11 @@ class MPC:
         
         
         #TODO: Clean this up
+        """ 
+        ======================================================================
+        Remove, slip constraint
+        ======================================================================
+        """
         dx_s = ca.SX.sym('dx')
         dy_s = ca.SX.sym('dy')
         dpsi_s = ca.SX.sym('dpsi')
@@ -180,10 +220,43 @@ class MPC:
         slip_min = -4 * np.pi / 180
         slip_max = 4 * np.pi / 180
         slip_f = ca.Function('slip_f', [dx_s, dy_s, dpsi_s, delta_f_s],
-                             [(dy_s + lf*dpsi_s) / dx_s - delta_f_s])
+                             [(dy_s + lf*dpsi_s)/(dx_s + 1e-6)   - delta_f_s])
         slip_r = ca.Function('slip_r', [dx_s, dy_s, dpsi_s],
-                             [(dy_s - lr*dpsi_s) / dx_s])
+                             [(dy_s - lr*dpsi_s)/(dx_s + 1e-6)])
         
+        """ 
+        ======================================================================
+        Discrete model test
+        ======================================================================
+        """
+        # Then get nonlinear casadi functions
+        # and rk4 discretization.
+        # Define symbolic variables.
+        x = ca.SX.sym("x", Ny)
+        u = ca.SX.sym("u", Nu)
+        ode_casadi = ca.Function("ode", [x,u], [ode(x,u)])
+        
+        k1 = ode_casadi(x, u)
+        k2 = ode_casadi(x + dt/2*k1, u)
+        k3 = ode_casadi(x + dt/2*k2, u)
+        k4 = ode_casadi(x + dt*k3,u)
+        xrk4 = x + dt/6*(k1 + 2*k2 + 2*k3 + k4)    
+        ode_rk4 = ca.Function("ode_rk4", [x,u], [xrk4])
+        
+        """ 
+        ======================================================================
+        Integrator
+        ======================================================================
+        """
+        # Make integrator object.
+        ode_integrator = dict(x=x,p=u, ode=ode(x,u))
+        intoptions = {
+            "abstol" : 1e-8,
+            "reltol" : 1e-8,
+            "tf" : dt,
+        }
+        self.__vdp = ca.integrator("int_ode",
+            "cvodes", ode_integrator, intoptions)
         
         # Create variables struct
         var = ctools.struct_symMX([(
@@ -211,7 +284,10 @@ class MPC:
         for t in range(Nt):
             self.__varlb['covariance', t] = np.full((Ny * Ny,), 0) 
             self.__varlb['eps', t] = 0
-            self.__varlb['mean', t] = np.full((Ny,), 1)
+            self.__varub['mean', t] = xub
+            self.__varlb['mean', t] = xlb
+            self.__varub['v', t] = uub
+            self.__varlb['v', t] = ulb
             if not feedback:
                 self.__varlb['K', t] = np.full((Nu * Ny,), 0)
                 self.__varub['K', t] = np.full((Nu * Ny,), 0)
@@ -228,8 +304,7 @@ class MPC:
         con_eq.append(var['covariance', 0] - covariance_0_s)
         u_past = u_0_s
         
-        #TODO: Add slack constraint or remove
-        lam = 14000 
+        
 
         covar_t = ca.MX(Nx, Nx)
 
@@ -240,68 +315,68 @@ class MPC:
             z = ca.vertcat(var['mean', t], u_t)
             covar_x_t = var['covariance', t].reshape((Ny, Ny))
             covar_t[:Ny, :Ny] = covar_x_t
+            
             #TODO: Fix this
             # Calculate next step
-            mean_next, covar_x_next = gp_func(z, covar_t)
+#            mean_next, covar_x_next = gp_func(z, covar_t)
             
+            """
+            ======================================================================
+            """
             #TODO: Remove after test
-            #***
-#            mean_next = Ik(var['mean', t], u_t)
-#            covar_x_next = ca.MX(Ny, Ny)
-            #****
+
+            mean_next = ode_rk4(var["mean",t], var["v",t])
+            covar_x_next = ca.MX(Ny, Ny)
+            """
+            ======================================================================
+            """
             
             # Continuity constraints
-            con_eq.append(var['mean', t + 1] - mean_next)
-            con_eq.append(var['covariance', t + 1] - covar_x_next.reshape((Ny * Ny,1)))
+            con_eq.append(ode_rk4(var["mean",t], var["v",t]) - var['mean', t + 1] )
+            con_eq.append(covar_x_next.reshape((Ny * Ny, 1)) - var['covariance', t + 1])
             
             # Chance state constraints
-            con_ineq.append(mean_next + quantile_x * ca.sqrt(ca.diag(covar_x_next) ))
-            con_ineq_ub.append(xub)
-            con_ineq_lb.append(np.full((Ny,), -ca.inf))
-            con_ineq.append(mean_next - quantile_x * ca.sqrt(ca.diag(covar_x_next)))
-            con_ineq_ub.append(np.full((Ny,), ca.inf))
-            con_ineq_lb.append(xlb)
-            
-            con_ineq.append(var['mean', t ])
-            con_ineq_ub.append(xub)
-            con_ineq_lb.append(xlb)
+#            con_ineq.append(mean_next + quantile_x * ca.sqrt(ca.diag(covar_x_next) ))
+#            con_ineq_ub.append(xub)
+#            con_ineq_lb.append(np.full((Ny,), -ca.inf))
+#            con_ineq.append(mean_next - quantile_x * ca.sqrt(ca.diag(covar_x_next)))
+#            con_ineq_ub.append(np.full((Ny,), ca.inf))
+#            con_ineq_lb.append(xlb)
+#            
+#            con_ineq.append(var['mean', t ])
+#            con_ineq_ub.append(xub)
+#            con_ineq_lb.append(xlb)
     
             # Input constraints
-            con_ineq.append(u_t)
-            con_ineq_ub.extend(uub)
-            con_ineq_lb.append(ulb)
+#            con_ineq.append(u_t)
+#            con_ineq_ub.extend(uub)
+#            con_ineq_lb.append(ulb)
             
             # Slip angle constraint
-#            dx = var['mean', t, 0]
-#            dy = var['mean', t, 1]
-#            dpsi = var['mean', t, 2]
-#            eps = var['eps', t]
-#            delta_f = u_t[2]
-#            lf  = 2.0 
-#            lr  = 2.0
-#            slip_min = -10 * np.pi / 180
-#            slip_max = 10 * np.pi / 180
+            dx = var['mean', t, 0]
+            dy = var['mean', t, 1]
+            dpsi = var['mean', t, 2]
+            delta_f = u_t[2]
 
-#            
-#            con_ineq.append(slip_f(var['mean', t, 0], var['mean', t, 1], var['mean', t, 2], delta_f) - slip_max)
-#            con_ineq_ub.append(0)
-#            con_ineq_lb.append(-ca.inf)
-#            
-#            con_ineq.append(slip_min - slip_f(var['mean', t, 0], var['mean', t, 1], var['mean', t, 2], delta_f))
-#            con_ineq_ub.append(0)
-#            con_ineq_lb.append(-ca.inf)
-#            
-#            con_ineq.append(slip_r(var['mean', t, 0], var['mean', t, 1], var['mean', t, 2]) - slip_max)
-#            con_ineq_ub.append(0)
-#            con_ineq_lb.append(-ca.inf)
-#            
-#            con_ineq.append(slip_min - slip_r(var['mean', t, 0], var['mean', t, 1], var['mean', t, 2]))
-#            con_ineq_ub.append(0)
-#            con_ineq_lb.append(-ca.inf)
-#            
+            con_ineq.append(slip_f(dx, dy, dpsi, delta_f) - slip_max - var['eps', t])
+            con_ineq_ub.append(0)
+            con_ineq_lb.append(-np.inf)
+            
+            con_ineq.append(slip_min - slip_f(dx, dy, dpsi, delta_f) - var['eps', t])
+            con_ineq_ub.append(0)
+            con_ineq_lb.append(-np.inf)
+            
+            con_ineq.append(slip_r(dx, dy, dpsi) - slip_max - var['eps', t])
+            con_ineq_ub.append(0)
+            con_ineq_lb.append(-np.inf)
+            
+            con_ineq.append(slip_min - slip_r(dx, dy, dpsi) - var['eps', t])
+            con_ineq_ub.append(0)
+            con_ineq_lb.append(-np.inf)
+            
             # Objective function
             u_delta = u_t - u_past
-            obj += l_func(var['mean', t], covar_x_t, u_t, u_delta, K_t) #+ lam*var['eps', t]
+            obj += l_func(var['mean', t], covar_x_t, u_t, u_delta, K_t) + lam*var['eps', t]
             u_t = u_past
         obj += lf_func(var['mean', Nt], var['covariance', Nt].reshape((Ny, Ny)))
     
@@ -327,6 +402,11 @@ class MPC:
         opts['ipopt.mu_init'] = 0.01
         opts['ipopt.tol'] = 1e-8
         opts['ipopt.warm_start_init_point'] = 'yes'
+        opts['ipopt.warm_start_bound_push'] = 1e-9
+        opts['ipopt.warm_start_bound_frac'] = 1e-9
+        opts['ipopt.warm_start_slack_bound_frac'] = 1e-9
+        opts['ipopt.warm_start_slack_bound_push'] = 1e-9
+        opts['ipopt.warm_start_mult_bound_push'] =  1e-9
         #opts['ipopt.fixed_variable_treatment'] = 'make_constraint'
         opts['print_time'] = False
         opts['verbose'] = False
@@ -430,11 +510,8 @@ class MPC:
             self.__lam_g0 = sol['lam_g']
             solve_time += time.time()
             # Print status
-            print("* t=%d: %s - %f sec" % (t * self.__dt, status, solve_time))
-            print(self.__mean[t,:])
-            print(self.__u[t,:])
-            
-            
+            print("* t=%f: %s - %f sec" % (t * self.__dt, status, solve_time))
+
             if t == 0:
                  for i in range(Nt + 1):
                      cov = optvar['covariance', i, :].reshape((Ny, Ny))
@@ -446,21 +523,23 @@ class MPC:
             K = np.array(optvar['K', 0]).reshape((Nu, Ny))
             self.__u[t, :] = np.array(self.__u_func(self.__mean[t, :], v, K)).flatten()
             self.__covariance[t + 1, :] = np.array(optvar['covariance', -1, :].reshape((Ny, Ny)))
-            
-            print('u')
-            print(self.__u[t,:])
+
             # Simulate the next step
             try:
-                self.__mean[t + 1, :] = simulator(self.__mean[t, :], self.__u[t, :].reshape((1, Nu)),
-                                    dt, dt, noise=True)
+                vdpargs = dict(x0=self.__mean[t , :] , p=self.__u[t,:])
+                out = self.__vdp(**vdpargs)
+                self.__mean[t + 1, :] = np.array(out["xf"]).flatten()
+#                self.__mean[t + 1, :] = simulator(self.__mean[t, :], self.__u[t, :].reshape((1, Nu)),
+#                                    dt, dt, noise=True)
             except RuntimeError:
                 print('********************************')
                 print('* Runtime error, adding jitter *')
                 print('********************************')
-                self.__u = self.__u.clip(min=1e-6)
-                self.__mean = self.__mean.clip(min=1e-6)
-                self.__mean[t + 1, :] = simulator(self.__mean[t, :], self.__u[t, :].reshape((1, Nu)),
-                                    dt, dt, noise=True)
+#                self.__u = self.__u.clip(min=1e-6)
+#                self.__mean = self.__mean.clip(min=1e-6)
+#                self.__mean[t + 1, :] = simulator(self.__mean[t, :], self.__u[t, :].reshape((1, Nu)),
+#                                    dt, dt, noise=True)
+                
         return self.__mean, self.__u
         
         
