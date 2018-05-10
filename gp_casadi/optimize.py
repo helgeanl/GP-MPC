@@ -83,7 +83,7 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
 
 
 def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
-             multistart=1, solver_opts=None):
+             multistart=1, optimizer_opts=None):
     """ Train hyperparameters
 
     Maximum likelihood estimation is used to optimize the hyperparameters of
@@ -103,7 +103,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     # Return:
         opt: Dictionary with the optimal hyperparameters [ell_1 .. ell_Nx sf sn].
     """
-    build_solver_time = -time.time()
+
     if log:
         X = np.log(X)
         Y = np.log(Y)
@@ -146,8 +146,8 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     opts['verbose']             = False
     opts['ipopt.print_level']   = 1
     opts["ipopt.tol"]          = 1e-8
-    if solver_opts is not None:
-        opts.update(solver_opts)
+    if optimizer_opts is not None:
+        opts.update(optimizer_opts)
 
     warm_start = False
     if hyper_init is not None:
@@ -159,13 +159,11 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     lam_x_opt = np.zeros((Ny, num_hyp))
     invK = np.zeros((Ny, N, N))
     invK_Y = np.zeros((Ny, N))
-    
-    build_solver_time += time.time()
+
     print('\n________________________________________')
-    print('# Time to build optimizer: %f sec' % build_solver_time)
+    print('# Optimizing hyperparameters' )
     print('----------------------------------------')
     for output in range(Ny):
-        print('* Optimizing hyperparameters for state %d:' % output)
         stdX      = np.std(X)
         stdF      = np.std(Y[:, output])
         meanF     = np.mean(Y)
@@ -216,7 +214,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
             hyp_opt_loc[i, :]   = res['x']
             lam_x_opt_loc       = res['lam_x']
             solve_time += time.time()
-            print("\t%s - %f s" % (status, solve_time))
+            print("* State %d: %s - %f s" % (output, status, solve_time))
 
         # With multistart, get solution with lowest decision function value
         hyp_opt[output, :]   = hyp_opt_loc[np.argmin(obj)]
@@ -287,6 +285,7 @@ def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc, alpha=None):
     for i in range(Ny):
         print('\t* State %d: %f' % (i + 1, standardized_loss[i]))
     print('----------------------------------------\n')
+    return standardized_loss
 
 
 """-----------------------------------------------------------------------------

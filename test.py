@@ -1,138 +1,255 @@
-#
-#     This file is part of CasADi.
-#
-#     CasADi -- A symbolic framework for dynamic optimization.
-#     Copyright (C) 2010-2014 Joel Andersson, Joris Gillis, Moritz Diehl,
-#                             K.U. Leuven. All rights reserved.
-#     Copyright (C) 2011-2014 Greg Horn
-#
-#     CasADi is free software; you can redistribute it and/or
-#     modify it under the terms of the GNU Lesser General Public
-#     License as published by the Free Software Foundation; either
-#     version 3 of the License, or (at your option) any later version.
-#
-#     CasADi is distributed in the hope that it will be useful,
-#     but WITHOUT ANY WARRANTY; without even the implied warranty of
-#     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-#     Lesser General Public License for more details.
-#
-#     You should have received a copy of the GNU Lesser General Public
-#     License along with CasADi; if not, write to the Free Software
-#     Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
-#
-#
-from casadi import *
+# Control of the Van der Pol
+# oscillator using pure casadi.
+from sys import path
+path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
+import casadi
 import casadi.tools as ctools
-
-"""
-Solves the following optimal control problem (OCP) in differential-algebraic
-equations (DAE)
-
-minimize     integral_{t=0}^{10} x0^2 + x1^2 + u^2  dt
-x0,x1,z,u
-
-subject to   dot(x0) == z*x0-x1+u     \
-             dot(x1) == x0             }  for 0 <= t <= 10
-                   0 == x1^2 + z - 1  /
-             x0(t=0) == 0
-             x1(t=0) == 1
-             x0(t=10) == 0
-             x1(t=10) == 0
-             -0.75 <= u <= 1  for 0 <= t <= 10
-
-The method used is direct multiple shooting.
-
-Joel Andersson, 2015
-"""
-
-# Declare variables
-x0 = SX.sym('x0')
-x1 = SX.sym('x1')
-x = vertcat(x0, x1) # Differential states
-z = SX.sym('z')       # Algebraic variable
-u = SX.sym('u')       # Control
-
-# Differential equation
-f_x = vertcat(z*x0-x1+u, x0)
-
-# Algebraic equation
-f_z = x1**2 + z - 1
-
-# Lagrange cost term (quadrature)
-f_q = x0**2 + x1**2 + u**2
-
-# Create an integrator
-dae = {'x':x, 'z':z, 'p':u, 'ode':f_x, 'alg':f_z, 'quad':f_q}
-opts = {'tf':0.5} # interval length
-I = integrator('I', 'idas', dae, opts)
-
-# Number of intervals
-nk = 20
-
-# Start with an empty NLP
-w = []   # List of variables
-lbw = [] # Lower bounds on w
-ubw = [] # Upper bounds on w
-G = []   # Constraints
-J = 0    # Cost function
-
-# Initial conditions
-#Xk = MX.sym('X0', 2)
-var = ctools.struct_symMX([(
-                ctools.entry('x', shape=(2,), repeat=nk +1),
-                ctools.entry('u', shape=(1,), repeat=nk ),
-        )])
-Xk = var['x',0]
-
-w.append(Xk)
-lbw += [ 0, 1 ]
-ubw += [ 0, 1 ]
-
-# Loop over all intervals
-for k in range(nk):
-  # Local control
- # Uk = MX.sym('U'+str(k))
-  Uk = var['u',k]
-  w.append(Uk)
-  lbw += [-0.75]
-  ubw += [ 1.00]
-
-  # Call integrator function
-  Ik = I(x0=Xk, p=Uk)
-  Xk = Ik['xf']
-  J = J + Ik['qf'] # Sum quadratures
-
-  # "Lift" the variable
-  X_prev = Xk
-  #Xk = MX.sym('X'+str(k+1), 2)
-  Xk = var['x',k +1]
-  w.append(Xk)
-  lbw += [-inf, -inf]
-  ubw += [ inf,  inf]
-  G.append(X_prev - Xk)
-
-# Allocate an NLP solver
-  #vertcat(*w)
-nlp = {'x':var, 'f':J, 'g':vertcat(*G)}
-opts = {'ipopt.linear_solver':'ma27'}
-solver = nlpsol('solver', 'ipopt', nlp, opts)
-
-# Pass bounds, initial guess and solve NLP
-sol = solver(lbx = lbw, # Lower variable bound
-             ubx = ubw,  # Upper variable bound
-             lbg = 0.0,  # Lower constraint bound
-             ubg = 0.0,  # Upper constraint bound
-             x0  = 0.0) # Initial guess
-
-# Plot the results
+import numpy as np
 import matplotlib.pyplot as plt
-plt.figure(1)
-plt.clf()
-plt.plot(linspace(0., 10., nk+1), sol['x'][0::3],'--')
-plt.plot(linspace(0., 10., nk+1), sol['x'][1::3],'-')
-plt.plot(linspace(0., 10., nk), sol['x'][2::3],'-.')
-plt.title('Van der Pol optimization - multiple shooting')
-plt.xlabel('time')
-plt.legend(['x0 trajectory','x1 trajectory','u trajectory'])
-plt.grid()
-plt.show()
+import time
+#<<ENDCHUNK>>
+
+# Define model and get simulator.
+Delta = .03
+Nt = 20
+Nx = 6
+Nu = 3
+def ode(x, u):
+    # Model Parameters (Gao et al., 2014)
+    g   = 9.18                          # Gravity [m/s^2]
+    m   = 2050                          # Vehicle mass [kg]
+    Iz  = 3344                          # Yaw inertia [kg*m^2]
+    Cr   = 65000                        # Tyre corning stiffness [N/rad]
+    Cf   = 65000                        # Tyre corning stiffness [N/rad]
+    mu  = 0.5                           # Tyre friction coefficient
+    l   = 4.0                           # Vehicle length
+    lf  = 2.0                           # Distance from CG to the front tyre
+    lr  = l - lf                        # Distance from CG to the rear tyre
+    Fzf = lr * m * g / (2 * l)          # Vertical load on front wheels
+    Fzr = lf * m * g / (2 * l)          # Vertical load on rear wheels
+    eps = 1e-8
+
+    dxdt = [
+                1/m * (m*x[1]*x[2] + 2*mu*Fzf*u[0] + 2*Cf*u[2]**2
+                    - 2*Cf*u[2] * (x[1] + lf*x[2]) / (x[0] + eps) + 2*mu*Fzr*u[1]),
+                1/m * (-m*x[0]*x[2] + 2*mu*Fzf*u[2]*u[0]
+                    + 2*Cf*(x[1] + lf*x[2]) / (x[0] + eps) - 2*Cf*u[2]
+                    + 2*Cr*(x[1] - lf*x[2]) / (x[0] + eps)),
+                1/Iz * (2*lf*mu*Fzf*u[0]*u[2] + 2*lf*Cf*(x[1] + lf*x[2]) / (x[0] + eps)
+                    - 2*lf*Cf*u[2] - 2*lr*Cr*(x[1] - lf*x[2]) / (x[0] + eps)),
+                x[2],
+                x[0]*casadi.cos(x[3]) - x[1]*casadi.sin(x[3]),
+                x[0]*casadi.sin(x[3]) + x[1]*casadi.cos(x[3])
+            ]
+    return np.array(dxdt)
+
+#<<ENDCHUNK>>
+
+# Define symbolic variables.
+x = casadi.SX.sym("x",Nx)
+u = casadi.SX.sym("u",Nu)
+
+# Make integrator object.
+ode_integrator = dict(x=x,p=u,
+    ode=ode(x,u))
+intoptions = {
+    "abstol" : 1e-8,
+    "reltol" : 1e-8,
+    "tf" : Delta,
+}
+vdp = casadi.integrator("int_ode",
+    "cvodes", ode_integrator, intoptions)
+
+#<<ENDCHUNK>>
+
+# Then get nonlinear casadi functions
+# and rk4 discretization.
+ode_casadi = casadi.Function(
+    "ode",[x,u],[ode(x,u)])
+
+k1 = ode_casadi(x, u)
+k2 = ode_casadi(x + Delta/2*k1, u)
+k3 = ode_casadi(x + Delta/2*k2, u)
+k4 = ode_casadi(x + Delta*k3,u)
+xrk4 = x + Delta/6*(k1 + 2*k2 + 2*k3 + k4)    
+ode_rk4_casadi = casadi.Function(
+    "ode_rk4", [x,u], [xrk4])
+
+#<<ENDCHUNK>>
+
+# Define stage cost and terminal weight.
+lfunc = (casadi.mtimes(x.T, x)
+    + casadi.mtimes(u.T, u))
+l = casadi.Function("l", [x,u], [lfunc])
+
+Pffunc = casadi.mtimes(x.T, x)
+Pf = casadi.Function("Pf", [x], [Pffunc])
+
+#<<ENDCHUNK>>
+
+# Bounds on u.
+ulb = [-.5, -.5, -.1,]
+uub = [.5, .5, .1,]
+
+xlb = [1, -.5, -2.0, -2.0, .0, .0]
+xub = [30, .5, 2.0, 2.0, np.inf, np.inf]
+#<<ENDCHUNK>>
+
+# Make optimizers.
+x0 = np.array([10, 0.0, 0.0, 0.0, 0.0 , 0.0])
+
+# Create variables struct.
+var = ctools.struct_symSX([(
+    ctools.entry("x",shape=(Nx,),repeat=Nt+1),
+    ctools.entry("u",shape=(Nu,),repeat=Nt),
+)])
+varlb = var(-np.inf)
+varub = var(np.inf)
+varguess = var(0)
+
+# Adjust the relevant constraints.
+for t in range(Nt):
+    varlb["u",t,:] = ulb
+    varub["u",t,:] = uub
+    varlb["x",t,:] = xlb
+    varub["x",t,:] = xub
+
+dx_s = casadi.SX.sym('dx')
+dy_s = casadi.SX.sym('dy')
+dpsi_s = casadi.SX.sym('dpsi')
+delta_f_s = casadi.SX.sym('delta_f') 
+lf  = 2.0 
+lr  = 2.0
+slip_min = -4 * np.pi / 180
+slip_max = 4 * np.pi / 180
+slip_f = casadi.Function('slip_f', [dx_s, dy_s, dpsi_s, delta_f_s],
+                     [(dy_s + lf*dpsi_s)/(dx_s + 1e-6)   - delta_f_s])
+slip_r = casadi.Function('slip_r', [dx_s, dy_s, dpsi_s],
+                     [(dy_s - lr*dpsi_s)/(dx_s + 1e-6)])
+
+
+# Now build up constraints and objective.
+obj = casadi.SX(0)
+con = []
+con_ineq = []
+con_ineq_lb = []
+con_ineq_ub = []
+for t in range(Nt):
+    con.append(ode_rk4_casadi(var["x",t],
+        var["u",t]) - var["x",t+1])
+    
+    # Slip angle constraint
+    dx = var['x', t, 0]
+    dy = var['x', t, 1]
+    dpsi = var['x', t, 2]
+    delta_f = var['u', t, 2]
+
+    con_ineq.append((dy + 2*dpsi)/(dx+1e-6) -delta_f - slip_max)
+    con_ineq_ub.append(0)
+    con_ineq_lb.append(-np.inf)
+    
+    con_ineq.append(slip_min - (dy + 2*dpsi)/(dx+1e-6) + delta_f )
+    con_ineq_ub.append(0)
+    con_ineq_lb.append(-np.inf)
+    
+    con_ineq.append((dy - 2*dpsi)/(dx+1e-6) - slip_max )
+    con_ineq_ub.append(0)
+    con_ineq_lb.append(-np.inf)
+    
+    con_ineq.append(slip_min - (dy - 2*dpsi)/(dx+1e-6) )
+    con_ineq_ub.append(0)
+    con_ineq_lb.append(-np.inf)
+    
+    
+    obj += l(var["x",t], var["u",t])
+obj += Pf(var["x",Nt])
+
+# Build solver object.
+con = casadi.vertcat(*con, *con_ineq)
+conlb = np.zeros((Nx*Nt,))
+conub = np.zeros((Nx*Nt,))
+conlb = casadi.vertcat(*conlb, *con_ineq_lb)
+conub = casadi.vertcat(*conub, *con_ineq_ub)
+
+nlp = dict(x=var, f=obj, g=con)
+nlpoptions = {
+    "ipopt" : {
+        "print_level" : 0,
+        "max_cpu_time" : 60,
+        'linear_solver' : 'ma27',
+    },
+    "print_time" : False,
+}
+solver = casadi.nlpsol("solver",
+    "ipopt", nlp, nlpoptions)
+
+#<<ENDCHUNK>>
+
+# Now simulate.
+Nsim = int(2 / Delta)
+times = Delta*Nsim*np.linspace(0,1,Nsim+1)
+x = np.zeros((Nsim+1,Nx))
+x[0,:] = x0
+u = np.zeros((Nsim,Nu))
+for t in range(Nsim):
+    # Fix initial state.    
+    varlb["x",0,:] = x[t,:]
+    varub["x",0,:] = x[t,:]
+    varguess["x",0,:] = x[t,:]
+    args = dict(x0=varguess,
+                lbx=varlb,
+                ubx=varub,
+                lbg=conlb,
+                ubg=conub)   
+    
+    #<<ENDCHUNK>>    
+    
+    # Solve nlp.    
+    t1 = -time.time()
+    sol = solver(**args)
+    status = solver.stats()["return_status"]
+    optvar = var(sol["x"])
+    t1 += time.time()
+    #<<ENDCHUNK>>    
+    
+    # Print stats.
+    print("%d: %s - Time: %f" % (t,status, t1))
+    u[t,:] = np.array(optvar["u",0,:]).flatten()
+    
+    #<<ENDCHUNK>>    
+    
+    # Simulate.
+    vdpargs = dict(x0=x[t,:],
+                   p=u[t,:])
+    out = vdp(**vdpargs)
+    x[t+1,:] = np.array(
+        out["xf"]).flatten()
+
+#<<ENDCHUNK>>
+    
+# Plots.
+fig = plt.figure()
+numrows = max(Nx,Nu)
+numcols = 2
+
+# u plots. Need to repeat last element
+# for stairstep plot.
+u = np.concatenate((u,u[-1:,:]))
+for i in range(Nu):
+    ax = fig.add_subplot(numrows,
+        numcols,numcols*(i+1))
+    ax.step(times,u[:,i],"-k")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Control %d" % (i + 1))
+
+# x plots.    
+for i in range(Nx):
+    ax = fig.add_subplot(numrows,
+        numcols,numcols*(i+1) - 1)
+    ax.plot(times,x[:,i],"-k",label="System")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("State %d" % (i + 1))
+
+fig.tight_layout(pad=.5)
+#import mpctools.plots # Need to grab one function to show plot.
+#mpctools.plots.showandsave(fig,"comparison_casadi.pdf")

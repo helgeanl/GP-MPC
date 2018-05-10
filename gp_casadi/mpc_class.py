@@ -16,7 +16,7 @@ import casadi as ca
 import casadi.tools as ctools
 from scipy.stats import norm
 #from matplotlib.font_manager import FontProperties
-from . gp_functions import gp_taylor_approx, gp
+from . gp_functions import gp_exact_moment, gp_taylor_approx, gp
 
 """ Test with discrete model
 
@@ -168,8 +168,8 @@ class MPC:
                                                  ca.MX(hyper), z_s.T, covar_s,
                                                  meanFunc=meanFunc, diag=True, log=log))
         elif method is 'EM':
-            gp_func = ca.Function('gp_taylor_approx', [z_s, covar_s],
-                                gp_taylor_approx(invK, ca.MX(X), ca.MX(Y),
+            gp_func = ca.Function('gp_exact_moment', [z_s, covar_s],
+                                gp_exact_moment(invK, ca.MX(X), ca.MX(Y),
                                                  ca.MX(hyper), z_s.T, covar_s,
                                                  diag=True))
         else:
@@ -241,7 +241,7 @@ class MPC:
         k3 = ode_casadi(x + dt/2*k2, u)
         k4 = ode_casadi(x + dt*k3,u)
         xrk4 = x + dt/6*(k1 + 2*k2 + 2*k3 + k4)    
-        ode_rk4 = ca.Function("ode_rk4", [x,u], [xrk4])
+        _ode_rk4 = ca.Function("ode_rk4", [x,u], [xrk4])
         
         """ 
         ======================================================================
@@ -318,39 +318,35 @@ class MPC:
             
             #TODO: Fix this
             # Calculate next step
-#            mean_next, covar_x_next = gp_func(z, covar_t)
+            mean_next, covar_x_next = gp_func(z, covar_t)
             
             """
             ======================================================================
             """
             #TODO: Remove after test
-
-            mean_next = ode_rk4(var["mean",t], var["v",t])
-            covar_x_next = ca.MX(Ny, Ny)
+#
+#            mean_next = ode_rk4(var["mean",t], var["v",t])
+#            covar_x_next = ca.MX(Ny, Ny)
             """
             ======================================================================
             """
             
             # Continuity constraints
-            con_eq.append(ode_rk4(var["mean",t], var["v",t]) - var['mean', t + 1] )
+            con_eq.append(mean_next - var['mean', t + 1] )
             con_eq.append(covar_x_next.reshape((Ny * Ny, 1)) - var['covariance', t + 1])
             
             # Chance state constraints
-#            con_ineq.append(mean_next + quantile_x * ca.sqrt(ca.diag(covar_x_next) ))
-#            con_ineq_ub.append(xub)
-#            con_ineq_lb.append(np.full((Ny,), -ca.inf))
-#            con_ineq.append(mean_next - quantile_x * ca.sqrt(ca.diag(covar_x_next)))
-#            con_ineq_ub.append(np.full((Ny,), ca.inf))
-#            con_ineq_lb.append(xlb)
-#            
-#            con_ineq.append(var['mean', t ])
-#            con_ineq_ub.append(xub)
-#            con_ineq_lb.append(xlb)
+            con_ineq.append(mean_next + quantile_x * ca.sqrt(ca.diag(covar_x_next) ))
+            con_ineq_ub.append(xub)
+            con_ineq_lb.append(np.full((Ny,), -ca.inf))
+            con_ineq.append(mean_next - quantile_x * ca.sqrt(ca.diag(covar_x_next)))
+            con_ineq_ub.append(np.full((Ny,), ca.inf))
+            con_ineq_lb.append(xlb)
     
             # Input constraints
-#            con_ineq.append(u_t)
-#            con_ineq_ub.extend(uub)
-#            con_ineq_lb.append(ulb)
+            con_ineq.append(u_t)
+            con_ineq_ub.extend(uub)
+            con_ineq_lb.append(ulb)
             
             # Slip angle constraint
             dx = var['mean', t, 0]
@@ -515,7 +511,6 @@ class MPC:
             if t == 0:
                  for i in range(Nt + 1):
                      cov = optvar['covariance', i, :].reshape((Ny, Ny))
-                     
                      self.__var_prediction[i, :] = np.array(ca.diag(cov)).flatten()
                      self.__mean_prediction[i, :] = np.array(optvar['mean', i]).flatten()
     
@@ -525,21 +520,11 @@ class MPC:
             self.__covariance[t + 1, :] = np.array(optvar['covariance', -1, :].reshape((Ny, Ny)))
 
             # Simulate the next step
-            try:
-                vdpargs = dict(x0=self.__mean[t , :] , p=self.__u[t,:])
-                out = self.__vdp(**vdpargs)
-                self.__mean[t + 1, :] = np.array(out["xf"]).flatten()
+            vdpargs = dict(x0=self.__mean[t , :] , p=self.__u[t,:])
+            out = self.__vdp(**vdpargs)
+            self.__mean[t + 1, :] = np.array(out["xf"]).flatten()
 #                self.__mean[t + 1, :] = simulator(self.__mean[t, :], self.__u[t, :].reshape((1, Nu)),
 #                                    dt, dt, noise=True)
-            except RuntimeError:
-                print('********************************')
-                print('* Runtime error, adding jitter *')
-                print('********************************')
-#                self.__u = self.__u.clip(min=1e-6)
-#                self.__mean = self.__mean.clip(min=1e-6)
-#                self.__mean[t + 1, :] = simulator(self.__mean[t, :], self.__u[t, :].reshape((1, Nu)),
-#                                    dt, dt, noise=True)
-                
         return self.__mean, self.__u
         
         
@@ -568,7 +553,7 @@ class MPC:
         x_s = ca.SX.sym('x', Nx)
         covar_x_s = ca.SX.sym('covar_z', Nx, Nx)
     
-        Z_x = ca.SX.eye(Nx) #+ 2 * covar_x_s @ P_s
+        Z_x = ca.SX.eye(Nx) + 2 * covar_x_s @ P_s
         cost_x = ca.Function('cost_x', [x_s, P_s, covar_x_s],
                            [1 - ca.exp(-(x_s.T @ ca.solve(Z_x.T, P_s.T).T @ x_s))
                                    / ca.sqrt(ca.det(Z_x))])
@@ -662,13 +647,13 @@ class MPC:
 
         if x_pred is not None:
             Nt_horizon = np.size(x_pred, 0)
-            t_horizon = np.linspace(0.0, Nt_horizon * dt, Nt_horizon)
+            t_horizon = np.linspace(0.0, Nt_horizon * dt -dt, Nt_horizon)
         if xnames is None:
             xnames = ['State %d' % (i + 1) for i in range(Nx)]
         if unames is None:
             unames = ['Control %d' % (i + 1) for i in range(Nu)]
     
-        t = np.linspace(0.0, Nt_sim * dt, Nt_sim)
+        t = np.linspace(0.0, Nt_sim * dt -dt, Nt_sim)
         u = np.vstack((u, u[-1, :]))
         numcols = 2
         numrows = int(np.ceil(Nx / numcols))

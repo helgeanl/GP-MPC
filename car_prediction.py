@@ -67,11 +67,13 @@ if __name__ == "__main__":
                 + 'invK' + str(i + 1), delimiter=',')
 
     dt = 0.03
-    x0 = np.array([1, 0.0, 0.0, 0.0, 0.0 , 0.0])
-    x_sp = np.array([.1, 0., 0., 0., 2., 0. ])
+    x0 = np.array([10, 0.0, 0.0, 0.0, 0.0 , 0.0])
+    
+    x_sp = np.array([10, 0., 0., 0., 20., 0. ])
+
     ulb = [-.5, -.5, -.1,]
     uub = [.5, .5, .1,]
-    xlb = [.1, -.5, -2.0, -2.0, .0, .0]
+    xlb = [1, -.5, -2.0, -2.0, .0, .0]
     xub = [30, .5, 2.0, 2.0, np.inf, np.inf]
     
 #    u_test = np.array([0.0, 0.0, 0]).reshape(1,3)
@@ -82,20 +84,20 @@ if __name__ == "__main__":
                   [0, 0, 0, 0, 0, 0],
                   [0, 0, 0, 0, 0, 0],
                   [0, 0, 0, 0, 0, 0],
-                  [0, 0, 0, 0, 10, 0],
-                  [0, 0, 0, 0, 0, 1]])
+                  [0, 0, 0, 0, 0, 0],
+                  [0, 0, 0, 0, 1, 0]])
     Q = np.array([[0, 0, 0, 0, 0, 0],
                   [0, 0, 0, 0, 0, 0],
                   [0, 0, 0, 0, 0, 0],
                   [0, 0, 0, 0, 0, 0],
-                  [0, 0, 0, 0, 5, 0],
-                  [0, 0, 0, 0, 0, 1]])
+                  [0, 0, 0, 0, 1, 0],
+                  [0, 0, 0, 0, 0, 0]])
 #    solver_opts['ipopt.check_derivatives_for_naninf'] = 'no'
     solver_opts['print_time'] = False
     solver_opts['verbose'] = False
 
-    mpc = MPC(X, Y, x0, x_sp, invK, hyper, horizon=20*dt,
-          sim_time=100*dt, dt=dt, method='TA',
+    mpc = MPC(X, Y, x0, x_sp, invK, hyper, horizon=1*dt,
+          sim_time=4*dt, dt=dt, method='ME',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P,
           meanFunc=meanFunc, terminal_constraint=None, log=log,
           costFunc='quad', feedback=False, solver_opts=solver_opts,
