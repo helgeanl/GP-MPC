@@ -63,7 +63,7 @@ def get_mean_function(hyper, X, func='zero'):
     return ca.Function('mean', [Z_s], [meanF(Z_s, hyper)])
 
 
-def gp(invK, X, Y, hyper, inputmean,  meanFunc='zero', log=False):
+def gp(invK, X, Y, hyper, inputmean,  alpha=None, meanFunc='zero', log=False):
     """ Gaussian Process
 
     # Arguments
@@ -91,27 +91,34 @@ def gp(invK, X, Y, hyper, inputmean,  meanFunc='zero', log=False):
     var  = ca.MX.zeros(Ny, 1)
 
     # Casadi symbols
-    x_s = ca.SX.sym('x', Nx)
-    z_s = ca.SX.sym('z', Nx)
-    ell_s = ca.SX.sym('ell', Nx)
-    sf2_s = ca.SX.sym('sf2')
+    x_s     = ca.SX.sym('x', Nx)
+    z_s     = ca.SX.sym('z', Nx)
+    ell_s   = ca.SX.sym('ell', Nx)
+    sf2_s   = ca.SX.sym('sf2')
+    
+    invK_s  = ca.SX.sym('invK', N, N)
+    Y_s     = ca.SX.sym('Y', N)
+    m_s     = ca.SX.sym('m')
+    ks_s    = ca.SX.sym('ks', N)
+    kss_s   = ca.SX.sym('kss')
+    ksT_invK_s = ca.SX.sym('ksT_invK', 1, N)
+    alpha_s = ca.SX.sym('alpha', N)
+    
     covSE = ca.Function('covSE', [x_s, z_s, ell_s, sf2_s],
                           [covSEard(x_s, z_s, ell_s, sf2_s)])
     
-    invK_s = ca.SX.sym('invK', N, N)
-    ks_s = ca.SX.sym('ks', N)
-    ksK_func = ca.Function('ksK', [ks_s, invK_s], [ca.mtimes(ks_s.T, invK_s)])
-    
-    ksK_s = ca.SX.sym('ksK', 1, N)
-    kss_s = ca.SX.sym('kss')
-    Y_s = ca.SX.sym('Y', N)
-    m_s = ca.SX.sym('m')
-    mean_func = ca.Function('mean', [ksK_s, Y_s, m_s], 
-                       [ca.mtimes(ksK_s, Y_s - m_s + m_s)])
-    
-    
-    var_func  = ca.Function('var', [kss_s, ks_s, ksK_s], 
-                            [kss_s - ca.mtimes(ksK_s, ks_s)])
+    ksT_invK_func = ca.Function('ksT_invK', [ks_s, invK_s], 
+                           [ca.mtimes(ks_s.T, invK_s)])
+
+    if alpha is not None:
+        mean_func = ca.Function('mean', [ks_s, alpha_s], 
+                           [ca.mtimes(ks_s.T, alpha_s)])
+    else:    
+        mean_func = ca.Function('mean', [ksT_invK_s, Y_s, m_s], 
+                           [ca.mtimes(ksT_invK_s, Y_s - m_s) + m_s])
+
+    var_func  = ca.Function('var', [kss_s, ksT_invK_s, ks_s], 
+                            [kss_s - ca.mtimes(ksT_invK_s, ks_s)])
 
     for output in range(Ny):
         m = get_mean_function(hyper[output, :], inputmean, func=meanFunc)
@@ -123,10 +130,12 @@ def gp(invK, X, Y, hyper, inputmean,  meanFunc='zero', log=False):
         for i in range(N):
             ks[i] = covSE(X[i, :], inputmean, ell, sf2)
         
-        ksK = ksK_func(ks, invK[output])
-
-        mean[output] = mean_func(ksK, Y[:, output], m(inputmean))
-        var[output] = var_func(kss, ks, ksK)
+        ksT_invK = ksT_invK_func(ks, ca.MX(invK[output]))
+        if alpha is not None:
+            mean[output] = mean_func(ks, ca.MX(alpha[output]))
+        else:
+            mean[output] = mean_func(ksT_invK, Y[:, output], m(inputmean))
+        var[output] = var_func(kss, ks, ksT_invK)
     
     if log:
         mean = ca.exp(mean)

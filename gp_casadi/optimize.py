@@ -15,7 +15,7 @@ import pyDOE
 import numpy as np
 import casadi as ca
 from scipy.spatial import distance
-from .gp_functions import get_mean_function, gp
+from .gp_functions import get_mean_function, gp, gp_exact_moment
 
 # -----------------------------------------------------------------------------
 # Optimization of hyperperameters as a constrained minimization problem
@@ -101,7 +101,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
                 'polynomial': m(x) = xT*diag(a)*x + bT*x + c
 
     # Return:
-        hyp_pot: Array with the optimal hyperparameters [ell_1 .. ell_Nx sf sn].
+        opt: Dictionary with the optimal hyperparameters [ell_1 .. ell_Nx sf sn].
     """
     build_solver_time = -time.time()
     if log:
@@ -158,13 +158,14 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     hyp_opt = np.zeros((Ny, num_hyp))
     lam_x_opt = np.zeros((Ny, num_hyp))
     invK = np.zeros((Ny, N, N))
+    invK_Y = np.zeros((Ny, N))
     
     build_solver_time += time.time()
     print('\n________________________________________')
     print('# Time to build optimizer: %f sec' % build_solver_time)
     print('----------------------------------------')
     for output in range(Ny):
-        print('Optimizing hyperparameters for state %d:' % output)
+        print('* Optimizing hyperparameters for state %d:' % output)
         stdX      = np.std(X)
         stdF      = np.std(Y[:, output])
         meanF     = np.mean(Y)
@@ -239,46 +240,53 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
             L = np.linalg.cholesky(K)
         invL = np.linalg.solve(L, np.eye(N))
         invK[output, :, :] = np.linalg.solve(L.T, invL)
+        invK_Y[output] = np.dot(invK[output], Y[:, output])
     print('----------------------------------------')
 
     opt = {}
     opt['hyper'] = hyp_opt
     opt['lam_x'] = lam_x_opt
     opt['invK'] = invK
+    opt['alpha'] = invK_Y
     return opt
 
 
-def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc):
+def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc, alpha=None):
     """ Validate GP model with new test data
     """
     N, Ny = Y_test.shape
     Nx = np.size(X, 1)
     z_s = ca.MX.sym('z', Nx)
+
     gp_func = ca.Function('gp', [z_s],
                                 gp(invK, ca.MX(X), ca.MX(Y), ca.MX(hyper),
-                                   z_s.T, meanFunc=meanFunc))
+                                   z_s.T, meanFunc=meanFunc, alpha=alpha))
     loss = 0
+
     for i in range(N):
         y, var = gp_func(X_test[i, :])
         loss += (Y_test[i, :] - y)**2
-    
     loss = loss / N
     standardized_loss = loss/ np.std(Y_test, 0)
+
     
+        
     #TODO: Add negative log porability 
     
     print('\n________________________________________')
-    print('Validation of GP model ')
+    print('# Validation of GP model ')
     print('----------------------------------------')
-    print('Num training samples: ' + str(np.size(Y, 0)))
-    print('Num test samples: ' + str(N))
-    print('Mean squared error: ')
+    print('* Num training samples: ' + str(np.size(Y, 0)))
+    print('* Num test samples: ' + str(N))
+    print('----------------------------------------')
+    print('* Mean squared error: ')
     for i in range(Ny):
-        print('\t* State %d: %f' % (i + 1, loss[i]))
-    print('Standardized mean squared error:')
+        print('\t- State %d: %f' % (i + 1, loss[i]))
+    print('----------------------------------------')
+    print('* Standardized mean squared error:')
     for i in range(Ny):
         print('\t* State %d: %f' % (i + 1, standardized_loss[i]))
-    print('----------------------------------------')
+    print('----------------------------------------\n')
 
 
 """-----------------------------------------------------------------------------

@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 ndstate = 6                             # Number of states
 nastate = 0                             # Number of algebraic equations
 ninput  = 3                             # Number of inputs
-dt      = 0.05                          # Time of one control interval 
+dt      = 0.03                          # Time of one control interval 
 
 training = True                        # True: generate training data
 sim = False                              # True: simualate and plot system
@@ -25,7 +25,7 @@ simTime = 10*dt # 300                           # Simulation time in seconds
 
 
 # Regression data
-npoints = 30                            # Number of data points generated
+npoints = 10                            # Number of data points generated
 u_min = np.array([-.5, -.5, -.1])       # Lower bound of control inputs
 u_max = np.array([.5, .5, .1])          # Upper bound of control inputs
 x_min = np.array([ 10,-.5, -2.,
@@ -99,13 +99,14 @@ def sim_system(x0, u, simTime, dt, noise=False):
     Y_sim = np.zeros((simPoints, ndstate))
 
     for t in range(simPoints):
-        print(t)
         t0i = 0.                 # start time of integrator
         tfi = dt                 # end time of integrator
         u_s = u_matrix[t, :]    # control input for simulation
-
+        print('Sim u:')
+        print(u_s)
         # simulate system
         x = integrate_system(ndstate, nastate, u_s, t0i, tfi, x)[:, 0]
+        print('Sim y:')
         print(x)
         # save simulated state with normal white noise added
         if noise:

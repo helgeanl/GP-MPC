@@ -50,6 +50,18 @@ class Model:
         
 
     def sim(self, x0, u, T, noise=False, clip_negative=False):
+        """ Simulate system
+        
+        # Arguments:
+            x0: Initial state
+            u: Input matrix with the input for each timestep in the simulation horizon
+            T: Simulation time
+            noise: If True, add gaussian noise using the noise covariance matrix
+            clip_negative: If true, clip negative simulated outputs to zero
+            
+        # Output:
+            Y_sim: Matrix with the simulated outputs (Nt, Ny)
+        """
         
         Nt = int(T / self.__dt)
         
