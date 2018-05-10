@@ -14,25 +14,34 @@ import matplotlib.pyplot as plt
 
 
 class Model:
-    def __init__(self, x, u, ode, dt, R, opt=None):
+    def __init__(self, Nx, Nu, ode, dt, R=None, alg=None, z=None, opt=None):
         """ Initialize dynamic model
         
         # Arguments:
-            x:   SX symbol vector with the states (Ny,1)
-            u:   SX symbol vector with the inputs (Nu,1)
-            ode: Casadi vector with the ODE, with u as a paramater
-            dt:  Sample time
+            Nx:   Number of states
+            Nu:   Number of inputs
+            ode:  ode(x, u)
+            dt:   Sampling time
     
         # Arguments (optional):    
             R:   Noise covariance matrix (Ny, Ny)
+            alg: Casadi vector with the algabraic equations
+            z:   SX symbol vector with algebraic variables
             opt: Options dict to pass to the IDEAS integrator
         """
-        dae = {'x': x, 'ode': ode, 'p':u}
-        
+
+
         # Create a default noise covariance matrix
         if R is None:
             self.__R = np.eye(self.__Ny) * 1e-3 
-            
+        else:
+            self.__R = R
+
+        self.dt   = dt
+        self.__Nu = Nu
+        self.__Nx = Nx
+        
+        """ Create integrator """
         # Integrator options
         opts = {}
         opts['abstol'] = 1e-10  # abs. tolerance
@@ -42,20 +51,40 @@ class Model:
         if opt is not None:
             opts.update(opt)
 
-        self.__dt
-        self.__Ny = ca.SX.size1(x)
-        self.__Nu = ca.SX.size1(u)
-        self.__Nx = self.__Ny + self.__Nu
-        self.__Sim = ca.integrator('Sim', 'idas', dae, opts)
+        x = ca.SX.sym('x', Nx)
+        u = ca.SX.sym('u', Nu)
+        dae = {'x': x, 'ode': ode(x,u), 'p':u}
+        self.__I = ca.integrator('I', 'idas', dae, opts)
         
+        """ Create discrete RK4 model """
+        ode_casadi = ca.Function("ode", [x,u], [ode(x,u)])
+        k1 = ode_casadi(x, u)
+        k2 = ode_casadi(x + dt/2*k1, u)
+        k3 = ode_casadi(x + dt/2*k2, u)
+        k4 = ode_casadi(x + dt*k3,u)
+        xrk4 = x + dt/6*(k1 + 2*k2 + 2*k3 + k4)    
+        self.rk4 = ca.Function("ode_rk4", [x,u], [xrk4])
 
-    def sim(self, x0, u, T, noise=False, clip_negative=False):
+    
+    def integrate(self, x0, u):
+        """ Integrate one time sample dt
+
+        # Arguments:
+            x0: Initial state vector
+            u: Input vector
+        # Returns:
+            x: Numpy array with x at t0 + dt
+        """
+        out = self.__I(x0=x0, p=u)
+        return np.array(out["xf"]).flatten()
+
+
+    def sim(self, x0, u, noise=False, clip_negative=False):
         """ Simulate system
         
         # Arguments:
             x0: Initial state
             u: Input matrix with the input for each timestep in the simulation horizon
-            T: Simulation time
             noise: If True, add gaussian noise using the noise covariance matrix
             clip_negative: If true, clip negative simulated outputs to zero
             
@@ -63,36 +92,34 @@ class Model:
             Y_sim: Matrix with the simulated outputs (Nt, Ny)
         """
         
-        Nt = int(T / self.__dt)
+        Nt = np.size(u, 0)
         
         # Initial state of the system
         x = x0
 
         # Predefine matrix to collect noisy state outputs
-        Y_sim = np.zeros((Nt, self.__Ny))
+        Y = np.zeros((Nt, self.__Nx))
     
         for t in range(Nt):
             u_t = u[t, :]    # control input for simulation
     
-            # simulate system
-            res = self.__Sim(x0=x0, p=u_t)
-            x = pylab.array(res['xf'])[:, 0]
-    
+            x = self.integrate(x, u_t)
+            Y[t, :] = x
+
             # Add normal white noise to state outputs
             if noise:
-                Y_sim[t, :] = x + np.random.multivariate_normal(np.zeros((self.__Ny)), self.__R)
-            else:
-                Y_sim[t, :] = x
+                Y[t, :] += np.random.multivariate_normal(
+                                    np.zeros((self.__Nx)), self.__R)
 
             # Limit values to above 1e-8 to avvoid to avvoid numerical errors
             if clip_negative:
-                if np.any(Y_sim < 0):
+                if np.any(Y < 0):
                     print('Negative values!')
-                    Y_sim = Y_sim.clip(min=1e-8)
-        return Y_sim
+                    Y = Y.clip(min=1e-8)
+        return Y
 
 
-    def generate_training_data(self, N, uub, ulb, xub, xlb, noise=True, R=None):
+    def generate_training_data(self, N, uub, ulb, xub, xlb, noise=True):
         """ Generate training data using latin hypercube design
         
         # Arguments:
@@ -102,62 +129,62 @@ class Model:
             xub: Upper state range (Ny,1)
             xlb: Lower state range (Ny,1)
         """
-        # Predefine matrix to collect control inputs
-        u_mat = np.zeros((N, self.__Nu))
-        # Predefine matrix to collect state inputs
-        X_mat = np.zeros((N, self.__Ny))
+        # Make sure boundry vectors are numpy arrays
+        uub = np.array(uub)
+        ulb = np.array(ulb)
+        xub = np.array(xub)
+        xlb = np.array(xlb)
+
+
         # Predefine matrix to collect noisy state outputs
-        Y_mat = np.zeros((N, self.__Ny))
-    
-        # Create a default noise covariance matrix
-        if noise and R is None:
-            R = np.eye(self.__Ny) * 1e-3 
+        Y = np.zeros((N, self.__Nx))
+        X = np.zeros((N, self.__Nx))
     
         # Create control input design using a latin hypecube
-        # Latin hypercube design for unit cube [0,1]^ndstate
-        u_matrix = pyDOE.lhs(self.__Nu, samples=N, criterion='maximin')
+        # Latin hypercube design for unit cube [0,1]^Nu
+        U = pyDOE.lhs(self.__Nu, samples=N, criterion='maximin')
         
         # Scale control inputs to correct range
         for k in range(N):
-            u_mat[k, :] = u_matrix[k, :] * (uub - ulb) + ulb
+            U[k, :] = U[k, :] * (uub - ulb) + ulb
     
         # Create state input design using a latin hypecube
-        # Latin hypercube design for unit cube [0,1]^ndstate
-        X_mat = pyDOE.lhs(self.__Nx, samples=N, criterion='maximin')
-    
+        # Latin hypercube design for unit cube [0,1]^Ny
+        X = pyDOE.lhs(self.__Nx, samples=N, criterion='maximin')
+        
         # Scale state inputs to correct range
         for k in range(N):
-            X_mat[k, :] = X_mat[k, :] * (xub - xlb) + xlb
-    
-        for un in range(N):
-            u_t = u_mat[un, :]    # control input for simulation
-            x_t = X_mat[un, :]    # state input for simulation
-    
-            # simulate system with x_s and u_s inputs for deltat time
-            res = self.__Sim(x0=x_t, p=u_t)
-            y = pylab.array(res['xf'])[:, 0]
+            X[k, :] = X[k, :] * (xub - xlb) + xlb
 
+        for i in range(N):
+            u_t = U[i, :]    # control input for simulation
+            x_t = X[i, :]    # state input for simulation
+    
+            # Simulate system with x_t and u_t inputs for deltat time
+            Y[i, :] = self.integrate(x_t, u_t)
+            
             # Add normal white noise to state outputs
-            Y_mat[un, :] = y + np.random.multivariate_normal(np.zeros((self.__Ny)), self.__R)
+            if noise:
+                Y[i, :] += np.random.multivariate_normal(
+                                np.zeros((self.__Nx)), self.__R)
     
-        # Concatenate inputs to obtain overall input to GP model
-        X_mat = np.hstack([X_mat, u_mat])
-        return X_mat, Y_mat
+        # Concatenate previous states and inputs to obtain overall input to GP model
+        X = np.hstack([X, U])
+        return X, Y
     
 
-    def plot(self, x0, u, T, numcols=2):
+    def plot(self, x0, u, numcols=2):
         """ Simulate and plot model
         
         # Arguments: 
             x0: Initial state
             u: Matrix with inputs for all time steps (Nt, Nu)
-            T: Time horizon for simulation
             numcols: Number of columns in the plot
         """
-        y = self.sim(x0, u, T, noise=True)
-        Nt = int(T / self.__dt)
-        t = np.linspace(0.0, Nt, 100)
-        numrows = int(np.ceil(self.__Ny / numcols))
+        y = self.sim(x0, u, noise=True)
+        Nt = np.size(u, 0)
+        t = np.linspace(0.0, (Nt - 1)* self.dt, Nt )
+        numrows = int(np.ceil(self.__Nx / numcols))
         
         fig_x = plt.figure()
         for i in range(self.__Nx):
