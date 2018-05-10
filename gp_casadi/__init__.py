@@ -5,3 +5,4 @@ from __future__ import division
 
 from . import gp_functions
 from . import optimize
+from .gp_class import GP
