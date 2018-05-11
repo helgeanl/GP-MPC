@@ -19,7 +19,7 @@ from .optimize import train_gp, validate
 
 
 class GP:
-    def __init__(self, X, Y, mean_func='zero', GP_method='TA', 
+    def __init__(self, X, Y, mean_func='zero', gp_method='TA', 
                  optimizer_opts=None):
         """ Initialize and optimize GP model
         
@@ -32,14 +32,20 @@ class GP:
         self.__X = X
         self.__Y = Y
         self.__mean_func = mean_func
-        self.__GP_method = GP_method
+        self.__gp_method = gp_method
         
         """ Optimize hyperparameters """
         opt = train_gp(self.__X, self.__Y, meanFunc=self.__mean_func, 
                        optimizer_opts=optimizer_opts)
         self.__hyper = opt['hyper']
         self.__invK  = opt['invK']
-        self.__alpha  = opt['alpha']
+        self.__alpha = opt['alpha']
+        self.__hyper_length_scales   = self.__hyper[:, :self.__Nx]
+        self.__hyper_signal_variance = self.__hyper[:, self.__Nx]**2
+        self.__hyper_noise_variance = self.__hyper[:, self.__Nx + 1]**2
+        self.__hyper_mean           = self.__hyper[:, (self.__Nx + 1):]
+        
+        self.set_method(gp_method)
 
 
     def validate(self, X_test, Y_test):
@@ -49,12 +55,13 @@ class GP:
         self._SMSE = np.max(SMSE)
 
 
-    def set_gp_method(self, gp_method='TA'):   
+    def set_method(self, gp_method='TA'):   
         """ Select wich GP function to use """
-        # Create GP and cos function symbols
+
         x = ca.MX.sym('x', self.__Ny)
         covar_s = ca.MX.sym('covar', self.__Nx, self.__Nx)
         u = ca.MX.sym('u', self.__Nu)
+        self.__gp_method = gp_method
 
         if gp_method is 'ME':
             self.predict = ca.Function('gp_mean', [x, u, covar_s],
@@ -68,12 +75,20 @@ class GP:
                                         ca.vertcat(x, u).T, covar_s, 
                                         meanFunc=self.__mean_func, diag=True))
         elif gp_method is 'EM':
-            self.predict = ca.Function('gp_taylor_approx', [x, u, covar_s],
+            self.predict = ca.Function('gp_exact_moment', [x, u, covar_s],
                                 gp_exact_moment(self.__invK, ca.MX(self.__X), 
                                         ca.MX(self.__Y), ca.MX(self.__hyper), 
                                         ca.vertcat(x, u).T, covar_s))
-        
-        
+        else:
+            raise NameError('No GP method called: ' + gp_method)
+
+
+    def noise_variance(self):
+        """ Get the noise variance
+        """
+        return self.__hyper_noise_variance
+
+
     def predict_compare(self, x0, u, model, num_cols=2, xnames=None, title=None,):
         """ Predict and compare all GP methods
         """
@@ -81,7 +96,7 @@ class GP:
         Nx = self.__Nx
         Ny = self.__Ny
         
-        dt = model.dt
+        dt = model.sampling_time()
         Nt = np.size(u, 0)
         sim_time = Nt * dt
         initVar = self.__hyper[:,Nx + 1]**2
@@ -91,7 +106,7 @@ class GP:
         covar = np.eye(Nx) * 1e-5 # Initial covar input matrix    
         
         for i in range(len(methods)):
-            self.set_gp_method(methods[i])
+            self.set_method(methods[i])
             mean_t = x0
             covar[:Ny, :Ny] = ca.diag(initVar)
             mean[i, 0, :] = x0

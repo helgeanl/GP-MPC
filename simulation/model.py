@@ -7,14 +7,14 @@ from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
 
 import pyDOE
-import pylab
 import numpy as np
 import casadi as ca
 import matplotlib.pyplot as plt
 
 
 class Model:
-    def __init__(self, Nx, Nu, ode, dt, R=None, alg=None, z=None, opt=None):
+    def __init__(self, Nx, Nu, ode, dt, R=None, alg=None, alg_0=None, Nz=None,
+                 opt=None, clip_negative=False):
         """ Initialize dynamic model
         
         # Arguments:
@@ -25,9 +25,11 @@ class Model:
     
         # Arguments (optional):    
             R:   Noise covariance matrix (Ny, Ny)
-            alg: Casadi vector with the algabraic equations
-            z:   SX symbol vector with algebraic variables
+            alg: alg(x, z, u)
+            alg_0: Initial value of algebraic variables
+            Nz:  Number of algebraic states
             opt: Options dict to pass to the IDEAS integrator
+            clip_negative: If true, clip negative simulated outputs to zero
         """
 
 
@@ -37,35 +39,61 @@ class Model:
         else:
             self.__R = R
 
-        self.dt   = dt
+        self.__dt   = dt
         self.__Nu = Nu
         self.__Nx = Nx
+        self.__Nz = Nz
+        self.__clip_negative = clip_negative
         
         """ Create integrator """
         # Integrator options
-        opts = {}
-        opts['abstol'] = 1e-10  # abs. tolerance
-        opts['reltol'] = 1e-10  # rel. tolerance
-        opts['t0'] = 0
-        opts['tf'] = dt
+        options = {
+            "abstol" : 1e-8,
+            "reltol" : 1e-8,
+            "tf" : dt,
+        }
         if opt is not None:
-            opts.update(opt)
+            options.update(opt)
 
         x = ca.SX.sym('x', Nx)
         u = ca.SX.sym('u', Nu)
-        dae = {'x': x, 'ode': ode(x,u), 'p':u}
-        self.__I = ca.integrator('I', 'idas', dae, opts)
         
-        """ Create discrete RK4 model """
-        ode_casadi = ca.Function("ode", [x,u], [ode(x,u)])
-        k1 = ode_casadi(x, u)
-        k2 = ode_casadi(x + dt/2*k1, u)
-        k3 = ode_casadi(x + dt/2*k2, u)
-        k4 = ode_casadi(x + dt*k3,u)
-        xrk4 = x + dt/6*(k1 + 2*k2 + 2*k3 + k4)    
-        self.rk4 = ca.Function("ode_rk4", [x,u], [xrk4])
+        if alg is not None:
+            z = ca.SX.sym('z', Nz)
+            self.__alg0 = ca.Function('alg_0', [x, u],
+                                      [alg_0(x, u)])
+            dae = {'x': x, 'ode': ode(x,u,z), 'p':u}
+            dae.update({'z':z, 'alg': alg(x, z, u)})
+        else:
+            dae = {'x': x, 'ode': ode(x,u), 'p':u}
+            
+        self.__I = ca.integrator('I', 'idas', dae, options)
+#        self.__I = ca.integrator('I', 'cvodes', ode, options)
+        
+        #TODO: Fix discrete DAE model
+        if alg is None: 
+            """ Create discrete RK4 model """
+            ode_casadi = ca.Function("ode", [x,u], [ode(x,u)])
+            k1 = ode_casadi(x, u)
+            k2 = ode_casadi(x + dt/2*k1, u)
+            k3 = ode_casadi(x + dt/2*k2, u)
+            k4 = ode_casadi(x + dt*k3,u)
+            xrk4 = x + dt/6*(k1 + 2*k2 + 2*k3 + k4)    
+            self.rk4 = ca.Function("ode_rk4", [x,u], [xrk4])
 
+
+    def sampling_time(self):
+        """ Get the sampling time
+        """
+        return self.__dt
     
+    
+    def size(self):
+        """ Get the size of the model
+        """
+        return self.__Nx, self.__Nu
+
+
     def integrate(self, x0, u):
         """ Integrate one time sample dt
 
@@ -75,18 +103,21 @@ class Model:
         # Returns:
             x: Numpy array with x at t0 + dt
         """
-        out = self.__I(x0=x0, p=u)
+        if self.__Nz is not None:
+            z0 = self.__alg0(x0, u)
+            out = self.__I(x0=x0, p=u, z0=z0)
+        else:
+            out = self.__I(x0=x0, p=u)
         return np.array(out["xf"]).flatten()
 
 
-    def sim(self, x0, u, noise=False, clip_negative=False):
+    def sim(self, x0, u, noise=False):
         """ Simulate system
         
         # Arguments:
             x0: Initial state
             u: Input matrix with the input for each timestep in the simulation horizon
             noise: If True, add gaussian noise using the noise covariance matrix
-            clip_negative: If true, clip negative simulated outputs to zero
             
         # Output:
             Y_sim: Matrix with the simulated outputs (Nt, Ny)
@@ -112,10 +143,10 @@ class Model:
                                     np.zeros((self.__Nx)), self.__R)
 
             # Limit values to above 1e-8 to avvoid to avvoid numerical errors
-            if clip_negative:
+            if self.__clip_negative:
                 if np.any(Y < 0):
-                    print('Negative values!')
-                    Y = Y.clip(min=1e-8)
+                    print('Clipping negative values in simulation!')
+                    Y = Y.clip(min=1e-6)
         return Y
 
 
@@ -183,7 +214,7 @@ class Model:
         """
         y = self.sim(x0, u, noise=True)
         Nt = np.size(u, 0)
-        t = np.linspace(0.0, (Nt - 1)* self.dt, Nt )
+        t = np.linspace(0.0, (Nt - 1)* self.__dt, Nt )
         numrows = int(np.ceil(self.__Nx / numcols))
         
         fig_x = plt.figure()
@@ -192,4 +223,4 @@ class Model:
             ax.plot(t, y[:, i], 'b-', marker='.', linewidth=1.0)
             ax.set_ylabel('x_' + str(i + 1))
             ax.set_xlabel('Time')
-        plt.show()
+        fig_x.canvas.set_window_title('Model simulation')

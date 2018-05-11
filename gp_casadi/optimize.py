@@ -161,7 +161,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     invK_Y = np.zeros((Ny, N))
 
     print('\n________________________________________')
-    print('# Optimizing hyperparameters' )
+    print('# Optimizing hyperparameters (N=%d)' % N )
     print('----------------------------------------')
     for output in range(Ny):
         stdX      = np.std(X)
