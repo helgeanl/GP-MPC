@@ -16,8 +16,7 @@ path.append(r"./GP_MPC/")
 import numpy as np
 import casadi as ca
 
-from gp_casadi import GP, MPC
-from simulation import Model
+from gp_mpc import Model, GP, MPC
 
 
 def ode(x, u):

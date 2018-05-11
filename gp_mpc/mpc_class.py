@@ -15,9 +15,7 @@ import matplotlib.pyplot as plt
 import casadi as ca
 import casadi.tools as ctools
 from scipy.stats import norm
-#from matplotlib.font_manager import FontProperties
 
-from . import GP
 
 
 class MPC:
