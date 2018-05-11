@@ -15,7 +15,7 @@ import pyDOE
 import numpy as np
 import casadi as ca
 from scipy.spatial import distance
-from . gp_functions import get_mean_function
+from .gp_functions import get_mean_function, gp, gp_exact_moment
 
 # -----------------------------------------------------------------------------
 # Optimization of hyperperameters as a constrained minimization problem
@@ -82,7 +82,8 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
     return NLL(Y - m(X), alpha, log_detK)
 
 
-def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False, multistart=1):
+def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
+             multistart=1, optimizer_opts=None):
     """ Train hyperparameters
 
     Maximum likelihood estimation is used to optimize the hyperparameters of
@@ -100,9 +101,9 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False, mul
                 'polynomial': m(x) = xT*diag(a)*x + bT*x + c
 
     # Return:
-        hyp_pot: Array with the optimal hyperparameters [ell_1 .. ell_Nx sf sn].
+        opt: Dictionary with the optimal hyperparameters [ell_1 .. ell_Nx sf sn].
     """
-    build_solver_time = -time.time()
+
     if log:
         X = np.log(X)
         Y = np.log(Y)
@@ -144,11 +145,10 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False, mul
     opts['print_time']          = False
     opts['verbose']             = False
     opts['ipopt.print_level']   = 1
-    opts['ipopt.linear_solver'] = 'ma27'
-    opts['ipopt.max_cpu_time']  = 4
-    #opts["ipopt.max_iter"]     = 100
-    #opts["ipopt.tol"]          = 1e-12
-    #opts["ipopt.hessian_approximation"] = "limited-memory"
+    opts["ipopt.tol"]          = 1e-8
+    if optimizer_opts is not None:
+        opts.update(optimizer_opts)
+
     warm_start = False
     if hyper_init is not None:
         opts['ipopt.warm_start_init_point'] = 'yes'
@@ -158,13 +158,12 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False, mul
     hyp_opt = np.zeros((Ny, num_hyp))
     lam_x_opt = np.zeros((Ny, num_hyp))
     invK = np.zeros((Ny, N, N))
-    
-    build_solver_time += time.time()
+    invK_Y = np.zeros((Ny, N))
+
     print('\n________________________________________')
-    print('# Time to build optimizer: %f sec' % build_solver_time)
+    print('# Optimizing hyperparameters (N=%d)' % N )
     print('----------------------------------------')
     for output in range(Ny):
-        print('Optimizing hyperparameters for state %d:' % output)
         stdX      = np.std(X)
         stdF      = np.std(Y[:, output])
         meanF     = np.mean(Y)
@@ -215,7 +214,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False, mul
             hyp_opt_loc[i, :]   = res['x']
             lam_x_opt_loc       = res['lam_x']
             solve_time += time.time()
-            print("\t%s - %f s" % (status, solve_time))
+            print("* State %d: %s - %f s" % (output, status, solve_time))
 
         # With multistart, get solution with lowest decision function value
         hyp_opt[output, :]   = hyp_opt_loc[np.argmin(obj)]
@@ -239,54 +238,85 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False, mul
             L = np.linalg.cholesky(K)
         invL = np.linalg.solve(L, np.eye(N))
         invK[output, :, :] = np.linalg.solve(L.T, invL)
+        invK_Y[output] = np.dot(invK[output], Y[:, output])
     print('----------------------------------------')
 
     opt = {}
     opt['hyper'] = hyp_opt
     opt['lam_x'] = lam_x_opt
     opt['invK'] = invK
+    opt['alpha'] = invK_Y
     return opt
 
 
-# -----------------------------------------------------------------------------
+def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc, alpha=None):
+    """ Validate GP model with new test data
+    """
+    N, Ny = Y_test.shape
+    Nx = np.size(X, 1)
+    z_s = ca.MX.sym('z', Nx)
+
+    gp_func = ca.Function('gp', [z_s],
+                                gp(invK, ca.MX(X), ca.MX(Y), ca.MX(hyper),
+                                   z_s.T, meanFunc=meanFunc, alpha=alpha))
+    loss = 0
+
+    for i in range(N):
+        y, var = gp_func(X_test[i, :])
+        loss += (Y_test[i, :] - y)**2
+    loss = loss / N
+    standardized_loss = loss/ np.std(Y_test, 0)
+
+    
+        
+    #TODO: Add negative log porability 
+    
+    print('\n________________________________________')
+    print('# Validation of GP model ')
+    print('----------------------------------------')
+    print('* Num training samples: ' + str(np.size(Y, 0)))
+    print('* Num test samples: ' + str(N))
+    print('----------------------------------------')
+    print('* Mean squared error: ')
+    for i in range(Ny):
+        print('\t- State %d: %f' % (i + 1, loss[i]))
+    print('----------------------------------------')
+    print('* Standardized mean squared error:')
+    for i in range(Ny):
+        print('\t* State %d: %f' % (i + 1, standardized_loss[i]))
+    print('----------------------------------------\n')
+    return standardized_loss
+
+
+"""-----------------------------------------------------------------------------
 # Preprocesing of training data
-# -----------------------------------------------------------------------------
-
-def standardize(X_original, Y_original, lb, ub):
-    # Scale input and output variables
-    X_scaled = np.zeros(X_original.shape)
-    Y_scaled = np.zeros(Y_original.shape)
-
-    # Normalize input data to [0 1]
-    for i in range(np.size(X_original, 1)):
-        X_scaled[:, i] = (X_original[:, i] - lb[i]) / (ub[i] - lb[i])
-
-    # Scale output data to a Gaussian with zero mean and unit variance
-    for i in range(np.size(Y_original, 1)):
-        Y_scaled[:, i] = (Y_original[:, i] - np.mean(Y_original[:, i])) / np.std(Y_original[:, i])
-
-    return X_scaled, Y_scaled
+-----------------------------------------------------------------------------"""
 
 
-def scale_min_max(X_original, lb, ub):
-    # Scale input and output variables
-    #X_scaled = np.zeros(X_original.shape)
+def normalize(X, lb, ub):
+    """ Normalize data between 0 and 1
+    # Arguments:
+        X: Input data (scalar/vector/matrix)
+        lb: Lower boundry (scalar/vector)
+        ub: Upper boundry (scalar/vector)
+    # Return:
+        X normalized (scalar/vector/matrix)
+    """
 
-    # Normalize input data to [0 1]
-    return (X_original - lb) / (ub - lb)
+    return (X - lb) / (ub - lb)
 
 
-def scale_min_max_inverse(X_scaled, lb, ub):
+def normalize_inverse(X_scaled, lb, ub):
     # Scale input and output variables
     # Normalize input data to [0 1]
     return X_scaled * (ub - lb) + lb
 
 
-def scale_gaussian(X_original, meanX, stdX):
+def standardize(X_original, meanX, stdX):
     # Scale input and output variables
     return (X_original - meanX) / stdX
 
 
-def scale_gaussian_inverse(X_scaled, meanX, stdX):
+def standardize_inverse(X_scaled, meanX, stdX):
     # Scale input and output variables
     return X_scaled * stdX + meanX
