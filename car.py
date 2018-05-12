@@ -15,11 +15,26 @@ path.append(r"./GP_MPC/")
 
 import numpy as np
 import casadi as ca
-
+import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
 from gp_mpc import Model, GP, MPC
 
 
-def ode(x, u):
+def plot_car(x ,y):
+    """ Plot the progression of the car in the x-y plane"""
+    plt.figure()
+    ax = plt.subplot(111)
+    ax.plot(x, y, 'b-', marker='.', linewidth=1.0)
+    ax.axhline(y=road_bound, color='r', linestyle='-')
+    ax.axhline(y=-road_bound, color='r', linestyle='-')
+    
+    ell = Ellipse(xy=obs, width=a, height=b)
+    ax.add_artist(ell)
+    ax.set_ylabel('y [m]')
+    ax.set_xlabel('x [m]')
+
+
+def ode(x, u, z, p):
     # Model Parameters (Gao et al., 2014)
     g   = 9.18                          # Gravity [m/s^2]
     m   = 2050                          # Vehicle mass [kg]
@@ -32,7 +47,7 @@ def ode(x, u):
     lr  = l - lf                        # Distance from CG to the rear tyre
     Fzf = lr * m * g / (2 * l)          # Vertical load on front wheels
     Fzr = lf * m * g / (2 * l)          # Vertical load on rear wheels
-    eps = 1e-8                          # Small epsilon to avoid dividing by zero
+    eps = 1e-6                          # Small epsilon to avoid dividing by zero
 
     dxdt = [
                 1/m * (m*x[1]*x[2] + 2*mu*Fzf*u[0] + 2*Cf*u[2]**2
@@ -50,19 +65,19 @@ def ode(x, u):
 
 
 def inequality_constraints(x, covar, u, eps):
-    # Slip angle constraint
-    dx_s = ca.SX.sym('dx')
+    """ Slip angle constraint """
+    dx_s = ca.SX.sym('dx')    
     dy_s = ca.SX.sym('dy')
     dpsi_s = ca.SX.sym('dpsi')
     delta_f_s = ca.SX.sym('delta_f') 
     lf  = 2.0 
     lr  = 2.0
-    slip_min = -4 * np.pi / 180
-    slip_max = 4 * np.pi / 180
+    
     slip_f = ca.Function('slip_f', [dx_s, dy_s, dpsi_s, delta_f_s],
                          [(dy_s + lf*dpsi_s)/(dx_s + 1e-6)   - delta_f_s])
     slip_r = ca.Function('slip_r', [dx_s, dy_s, dpsi_s],
                          [(dy_s - lr*dpsi_s)/(dx_s + 1e-6)])
+
     con_ineq = []
     con_ineq_lb = []
     con_ineq_ub = []
@@ -82,6 +97,22 @@ def inequality_constraints(x, covar, u, eps):
     con_ineq.append(slip_min - slip_r(x[0], x[1], x[2]) - eps)
     con_ineq_ub.append(0)
     con_ineq_lb.append(-np.inf)
+    
+    """ Add road boundry constraints """
+    con_ineq.append(x[5])
+    con_ineq_ub.append(road_bound)
+    con_ineq_lb.append(-road_bound)
+    
+    """ Obstacle avoidance """
+    Xcg_s = ca.SX.sym('Xcg')
+    Ycg_s = ca.SX.sym('Ycg')
+    ellipse = ca.Function('ellipse', [Xcg_s, Ycg_s],
+                         [ ((Xcg_s - obs[0]) / a)**2 
+                          + ((Ycg_s - obs[1]) / b)**2] )
+    con_ineq.append(eps - ellipse(x[4], x[5]) + 1)
+    con_ineq_ub.append(0)
+    con_ineq_lb.append(-np.inf)
+    
     cons = dict(con_ineq=con_ineq,
                 con_ineq_lb=con_ineq_lb,
                 con_ineq_ub=con_ineq_ub
@@ -104,10 +135,10 @@ R = np.eye(Nx) * 1e-5
 # Limits in the training data
 ulb = [-.5, -.5, -.1,]
 uub = [.5, .5, .1,]
-xlb = [5.0, -.5, -2.0, -2.0, .0, .0]
+xlb = [1.0, -.5, -2.0, -2.0, .0, .0]
 xub = [25.0, .5, 2.0, 2.0, 10, 1]
 
-N = 20 # Number of training data
+N = 10 # Number of training data
 
 # Create simulation model
 model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R)
@@ -118,31 +149,39 @@ X_test, Y_test = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 gp = GP(X, Y)
 gp.validate(X_test, Y_test)
 
-x0 = np.array([10, 0.0, 0.0, 0.0, 0.0 , 0.0])
+x0 = np.array([15, 0.0, 0.0, 0.0, 1.0 , 0.0])
 u_test = np.zeros((30, 3))
-gp.predict_compare(x0, u_test, model)
+#gp.predict_compare(x0, u_test, model)
 
 # Limits in the MPC problem
-ulb = [-.5, -.5, -.1,]
-uub = [.5, .5, .1,]
-xlb = [5.0, -.5, -2.0, -2.0, .0, .0]
+ulb = [-.5, -.5, -.5,]
+uub = [.5, .5, .5,]
+xlb = [1.0, -.5, -2.0, -2.0, .0, -np.inf]
 xub = [25.0, .5, 2.0, 2.0, np.inf, np.inf]
-x_sp = np.array([10, 0., 0., 0., 20., 0. ])
+x_sp = np.array([5, 0., 0., 0., 20., 0. ])
+
+# Constraint parameters
+slip_min = -4.0 * np.pi / 180
+slip_max = 4.0 * np.pi / 180
+road_bound = 2.0
+obs = [18., 0.]
+a = 2.
+b = .5
 
 P = np.array([[0, 0, 0, 0, 0, 0],
+              [0, 5, 0, 0, 0, 0],
+              [0, 0, 2, 0, 0, 0],
               [0, 0, 0, 0, 0, 0],
               [0, 0, 0, 0, 0, 0],
-              [0, 0, 0, 0, 0, 0],
-              [0, 0, 0, 0, 0, 0],
-              [0, 0, 0, 0, 1, 0]])
+              [0, 0, 0, 0, 0, 1]])
 Q = np.array([[0, 0, 0, 0, 0, 0],
+              [0, 5, 0, 0, 0, 0],
+              [0, 0, 2, 0, 0, 0],
               [0, 0, 0, 0, 0, 0],
               [0, 0, 0, 0, 0, 0],
-              [0, 0, 0, 0, 0, 0],
-              [0, 0, 0, 0, 1, 0],
-              [0, 0, 0, 0, 0, 0]])
+              [0, 0, 0, 0, 0, .1]])
 
-mpc = MPC(horizon=1*dt, gp=gp, model=model,
+mpc = MPC(horizon=20*dt, gp=gp, model=model,
           gp_method='EM',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P,
           terminal_constraint=None, costFunc='quad', feedback=False, 
@@ -151,6 +190,7 @@ mpc = MPC(horizon=1*dt, gp=gp, model=model,
           )
 
 
-x, u = mpc.solve(x0, sim_time=4*dt, x_sp=x_sp)
+x, u = mpc.solve(x0, sim_time=40*dt, x_sp=x_sp, debug=True)
 mpc.plot()
+plot_car(x[:, 4], x[:, 5])
 

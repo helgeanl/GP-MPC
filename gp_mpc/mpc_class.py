@@ -23,7 +23,8 @@ class MPC:
                  Q=None, P=None, R=None, S=None, C=None,
                  ulb=None, uub=None, xlb=None, xub=None, terminal_constraint=None,
                  feedback=True, gp_method='TA', costFunc='quad', solver_opts=None,
-                 discrete_model=False, inequality_constraints=None):
+                 discrete_model=False, inequality_constraints=None,
+                 parameters=None):
 
         """ Initialize and build the MPC solver
         
@@ -70,7 +71,7 @@ class MPC:
 
         build_solver_time = -time.time()
         dt = model.sampling_time()
-        Ny, Nu = model.size()
+        Ny, Nu, Np = model.size()
         Nx = Nu + Ny
         Nt = int(horizon / dt)
 
@@ -80,6 +81,7 @@ class MPC:
         self.__Nx = Nx
         self.__Nu = Nu
         self.__model = model
+
 
         if P is None:
             P = np.eye(Ny)
@@ -202,7 +204,7 @@ class MPC:
             
             # Choose between GP and RK4 for next step
             if discrete_model:
-                mean_next = model.rk4(var["mean",t], u_t)
+                mean_next = model.rk4(var["mean",t], u_t,[])
                 covar_x_next = ca.MX(Ny, Ny)
             else:
                 mean_next, covar_x_next = gp.predict(var['mean',t], u_t, covar_t)
@@ -500,12 +502,12 @@ class MPC:
 
 
     def __debug(self, t):
-        print('###############  Debug  ################')
-        print('Mean_%d:' %t)
+        print('_______________  Debug  ________________')
+        print('* Mean_%d:' %t)
         print(self.__mean[t])
-        print('u_%d:' % t)
+        print('* u_%d:' % t)
         print(self.__u[t])
-        print('****************************************')
+        print('----------------------------------------')
 
 
 
@@ -562,7 +564,7 @@ class MPC:
         if title is not None:
             fig_x.canvas.set_window_title(title)
         else:
-            fig_x.canvas.set_window_title('Simulation')
+            fig_x.canvas.set_window_title('MPC - H: %d' % self.__Nt)
     
         return fig_x, fig_u
 

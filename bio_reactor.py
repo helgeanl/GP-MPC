@@ -92,7 +92,7 @@ solver_opts = {
 }
 
 meanFunc = 'zero'
-dt = 10.0
+dt = .1
 Nx = 3
 Nu = 2
 Nz = 2
@@ -104,7 +104,7 @@ uub = [1., .1]
 xlb = [.0, .0, .0]
 xub = [1., 1., 1.]
 
-N = 50 # Number of training data
+N = 60 # Number of training data
 
 # Create simulation model
 model          = Model(Nx=Nx, Nu=Nu, Nz=Nz, ode=ode, alg=alg, alg_0=alg_0, 
@@ -116,8 +116,8 @@ X_test, Y_test = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 gp = GP(X, Y)
 gp.validate(X_test, Y_test)
 
-x0 = np.array([.1, .1, .1])
-u_test = np.ones((30, 2)) * .1
+x0 = np.array([.3, .3, .3])
+u_test = np.ones((30, 2)) * .3
 gp.predict_compare(x0, u_test, model)
 model.plot(x0, u_test)
 
@@ -125,18 +125,18 @@ model.plot(x0, u_test)
 ulb = [0., 0.]
 uub = [1., .1]
 xlb = [.0, .0, .0]
-xub = [1., 1., 1., 1.]
-x_sp = np.array([.2, .2, .2])
+xub = [1., 1., 1.]
+x_sp = np.array([.5, .5, .5])
 
-mpc = MPC(horizon=12*dt, gp=gp, model=model,
-          gp_method='ME',
-          ulb=ulb, uub=uub, xlb=xlb, xub=xub, 
-          terminal_constraint=0, costFunc='quad', feedback=False, 
-          solver_opts=solver_opts, discrete_model=True,
-          inequality_constraints=None
-          )
-
-
-x, u = mpc.solve(x0, sim_time=15*dt, x_sp=x_sp, debug=False)
-mpc.plot()
+#mpc = MPC(horizon=12*dt, gp=gp, model=model,
+#          gp_method='ME',
+#          ulb=ulb, uub=uub, xlb=xlb, xub=xub, 
+#          terminal_constraint=0, costFunc='quad', feedback=False, 
+#          solver_opts=solver_opts, discrete_model=False,
+#          inequality_constraints=None
+#          )
+#
+#
+#x, u = mpc.solve(x0, sim_time=15*dt, x_sp=x_sp, debug=False)
+#mpc.plot()
 

@@ -88,7 +88,16 @@ class GP:
         """
         return self.__hyper_noise_variance
 
-
+    
+    def sparse(self, M):
+        """ Sparse Gaussian Process
+            Use Fully Independent Training Conditional (FITC) to approximate
+            the GP distribution and reduce computational complexity.
+        
+        # Arguments:
+            M: Reduce the model size from N to M.
+        """
+    
     def predict_compare(self, x0, u, model, num_cols=2, xnames=None, title=None,):
         """ Predict and compare all GP methods
         """
@@ -118,7 +127,7 @@ class GP:
             
     
         t = np.linspace(0.0, sim_time, Nt + 1)
-        Y_sim = model.sim(x0, u, sim_time)
+        Y_sim = model.sim(x0, u)
         Y_sim = np.vstack([x0, Y_sim])
 
 

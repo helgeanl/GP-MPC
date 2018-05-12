@@ -20,7 +20,7 @@ import time
 from gp_mpc import Model, GP, MPC
 
 
-def ode(x, u):
+def ode(x, u, z, p):
     # Model Parameters (Raff, Tobias et al., 2006)
     g = 981
     a1 = 0.233
@@ -91,7 +91,7 @@ gp.validate(X_test, Y_test)
 
 x0 = np.array([8., 10., 8., 18.])
 u_test = np.ones((30, 2)) * 50
-#gp.predict_compare(x0, u_test, model)
+gp.predict_compare(x0, u_test, model)
 #model.plot(x0, u_test)
 
 # Limits in the MPC problem
@@ -111,7 +111,7 @@ P = np.array([[10, 0, 0, 0],
               [0, 0, 0, 10]])
 
 mpc = MPC(horizon=12*dt, gp=gp, model=model,
-          gp_method='ME',
+          gp_method='TA',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P,
           terminal_constraint=0, costFunc='quad', feedback=False, 
           solver_opts=solver_opts, discrete_model=True,
