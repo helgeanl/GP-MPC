@@ -132,7 +132,7 @@ x_sp = np.array([.5, .5, .5])
 #          gp_method='ME',
 #          ulb=ulb, uub=uub, xlb=xlb, xub=xub, 
 #          terminal_constraint=0, costFunc='quad', feedback=False, 
-#          solver_opts=solver_opts, discrete_model=False,
+#          solver_opts=solver_opts, use_rk4=False,
 #          inequality_constraints=None
 #          )
 #

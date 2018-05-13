@@ -114,7 +114,7 @@ mpc = MPC(horizon=12*dt, gp=gp, model=model,
           gp_method='TA',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P,
           terminal_constraint=0, costFunc='quad', feedback=False, 
-          solver_opts=solver_opts, discrete_model=True,
+          solver_opts=solver_opts, use_rk4=True,
           inequality_constraints=None
           )
 
