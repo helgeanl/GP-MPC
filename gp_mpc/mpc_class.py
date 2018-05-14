@@ -20,10 +20,11 @@ from scipy.stats import norm
 
 class MPC:
     def __init__(self, horizon, gp, model,
-                 Q=None, P=None, R=None, S=None, C=None,
+                 Q=None, P=None, R=None, S=None, lam=None, 
                  ulb=None, uub=None, xlb=None, xub=None, terminal_constraint=None,
                  feedback=True, gp_method='TA', costFunc='quad', solver_opts=None,
-                 discrete_model=False, inequality_constraints=None):
+                 use_rk4=False, inequality_constraints=None,
+                 parameters=None):
 
         """ Initialize and build the MPC solver
         
@@ -37,6 +38,7 @@ class MPC:
             P: Termial penalty matrix
             R: Input penalty matrix
             S: Input rate of change penalty matrix
+            lam: Slack variable penalty
             ulb: Lower boundry input
             uub: Upper boundry input
             xlb: Lower boundry state
@@ -57,7 +59,7 @@ class MPC:
             solver_opts: Additional options to pass to the NLP solver
                     e.g.: solver_opts['print_time'] = False
                           solver_opts['ipopt.tol'] = 1e-8
-            discrete_model: If True, use RK4 of real model instead of GP
+            use_rk4: If True, use RK4 of real model instead of GP
             inequality_constraints: Additional inequality constraints
                     Use a function with inputs (x, covar, u, eps) and
                     that returns a dictionary with inequality constraints and limits.
@@ -70,7 +72,7 @@ class MPC:
 
         build_solver_time = -time.time()
         dt = model.sampling_time()
-        Ny, Nu = model.size()
+        Ny, Nu, Np = model.size()
         Nx = Nu + Ny
         Nt = int(horizon / dt)
 
@@ -81,17 +83,18 @@ class MPC:
         self.__Nu = Nu
         self.__model = model
 
+        """ Default penalty values """
         if P is None:
             P = np.eye(Ny)
         if Q is None:
             Q = np.eye(Ny)
         if R is None:
-            R = np.eye(Nu) * 0.001
+            R = np.eye(Nu) * 0.01
         if S is None:
-            S = np.eye(Nu) * 0.001
+            S = np.eye(Nu) * 0.1
+        if lam is None:
+            lam = 1000
 
-        #TODO: Add slack constraint or remove
-        lam = 14000 
     
         #TODO: Clean this up
         percentile = 0.95
@@ -122,7 +125,7 @@ class MPC:
         # Initialize state variance with the GP noise variance
         self.__variance_0 = gp.noise_variance()
         
-        #TODO: refactor this
+        #TODO: refactor this out
         """ Define stage cost and terminal cost """
         if costFunc is 'quad':
             l_func = ca.Function('l', [mean_s, covar_x_s, u_s, delta_u_s, K_s],
@@ -151,7 +154,7 @@ class MPC:
             u_func = ca.Function('u', [mean_s, v_s, K_s], [v_s])        
         self.__u_func = u_func
 
-        # Create variables struct
+        """ Create variables struct """
         var = ctools.struct_symMX([(
                 ctools.entry('mean', shape=(Ny,), repeat=Nt + 1),
                 ctools.entry('covariance', shape=(Ny * Ny,), repeat=Nt + 1),
@@ -201,8 +204,8 @@ class MPC:
             covar_t[:Ny, :Ny] = covar_x_t
             
             # Choose between GP and RK4 for next step
-            if discrete_model:
-                mean_next = model.rk4(var["mean",t], u_t)
+            if use_rk4:
+                mean_next = model.rk4(var["mean",t], u_t,[])
                 covar_x_next = ca.MX(Ny, Ny)
             else:
                 mean_next, covar_x_next = gp.predict(var['mean',t], u_t, covar_t)
@@ -242,7 +245,7 @@ class MPC:
             
             # Objective function
             u_delta = u_t - u_past
-            obj += l_func(var['mean', t], covar_x_t, u_t, u_delta, K_t) + lam*var['eps', t]
+            obj += l_func(var['mean', t], covar_x_t, u_t, u_delta, K_t) + lam * var['eps', t]
             u_t = u_past
         obj += lf_func(var['mean', Nt], var['covariance', Nt].reshape((Ny, Ny)))
     
@@ -307,7 +310,6 @@ class MPC:
             x_sp: State set point, default is zero
             u0: Initial input
             
-        
         # Returns:
             mean: Simulated output using the optimal control inputs
             u: Optimal control inputs
@@ -500,12 +502,12 @@ class MPC:
 
 
     def __debug(self, t):
-        print('###############  Debug  ################')
-        print('Mean_%d:' %t)
+        print('_______________  Debug  ________________')
+        print('* Mean_%d:' %t)
         print(self.__mean[t])
-        print('u_%d:' % t)
+        print('* u_%d:' % t)
         print(self.__u[t])
-        print('****************************************')
+        print('----------------------------------------')
 
 
 
@@ -562,7 +564,7 @@ class MPC:
         if title is not None:
             fig_x.canvas.set_window_title(title)
         else:
-            fig_x.canvas.set_window_title('Simulation')
+            fig_x.canvas.set_window_title('MPC - H: %d' % self.__Nt)
     
         return fig_x, fig_u
 
