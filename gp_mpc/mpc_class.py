@@ -20,7 +20,7 @@ from scipy.stats import norm
 
 class MPC:
     def __init__(self, horizon, gp, model,
-                 Q=None, P=None, R=None, S=None, C=None,
+                 Q=None, P=None, R=None, S=None, lam=None, 
                  ulb=None, uub=None, xlb=None, xub=None, terminal_constraint=None,
                  feedback=True, gp_method='TA', costFunc='quad', solver_opts=None,
                  use_rk4=False, inequality_constraints=None,
@@ -38,6 +38,7 @@ class MPC:
             P: Termial penalty matrix
             R: Input penalty matrix
             S: Input rate of change penalty matrix
+            lam: Slack variable penalty
             ulb: Lower boundry input
             uub: Upper boundry input
             xlb: Lower boundry state
@@ -82,18 +83,18 @@ class MPC:
         self.__Nu = Nu
         self.__model = model
 
-
+        """ Default penalty values """
         if P is None:
             P = np.eye(Ny)
         if Q is None:
             Q = np.eye(Ny)
         if R is None:
-            R = np.eye(Nu) * 0.001
+            R = np.eye(Nu) * 0.01
         if S is None:
-            S = np.eye(Nu) * 0.001
+            S = np.eye(Nu) * 0.1
+        if lam is None:
+            lam = 1000
 
-        #TODO: Add slack constraint or remove
-        lam = 1400 
     
         #TODO: Clean this up
         percentile = 0.95
@@ -153,7 +154,7 @@ class MPC:
             u_func = ca.Function('u', [mean_s, v_s, K_s], [v_s])        
         self.__u_func = u_func
 
-        # Create variables struct
+        """ Create variables struct """
         var = ctools.struct_symMX([(
                 ctools.entry('mean', shape=(Ny,), repeat=Nt + 1),
                 ctools.entry('covariance', shape=(Ny * Ny,), repeat=Nt + 1),
@@ -244,7 +245,7 @@ class MPC:
             
             # Objective function
             u_delta = u_t - u_past
-            obj += l_func(var['mean', t], covar_x_t, u_t, u_delta, K_t) + lam*var['eps', t]
+            obj += l_func(var['mean', t], covar_x_t, u_t, u_delta, K_t) + lam * var['eps', t]
             u_t = u_past
         obj += lf_func(var['mean', Nt], var['covariance', Nt].reshape((Ny, Ny)))
     
@@ -309,7 +310,6 @@ class MPC:
             x_sp: State set point, default is zero
             u0: Initial input
             
-        
         # Returns:
             mean: Simulated output using the optimal control inputs
             u: Optimal control inputs

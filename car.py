@@ -27,7 +27,7 @@ def plot_car(x ,y):
     ax.axhline(y=road_bound, color='r', linestyle='-')
     ax.axhline(y=0, color='g', linestyle='--')
     ax.axhline(y=-road_bound, color='r', linestyle='-')
-    ell = Ellipse(xy=obs, width=a*2, height=b*2)
+    ell = Ellipse(xy=obs_pos, width=obs_length*2, height=obs_width*2)
     ax.add_artist(ell)
     ax.plot(x, y, 'b-', linewidth=1.0)
     ax.set_ylabel('y [m]')
@@ -135,8 +135,8 @@ def inequality_constraints(x, covar, u, eps):
     Xcg_s = ca.SX.sym('Xcg')
     Ycg_s = ca.SX.sym('Ycg')
     ellipse = ca.Function('ellipse', [Xcg_s, Ycg_s],
-                         [ ((Xcg_s - obs[0]) / a)**2 
-                          + ((Ycg_s - obs[1]) / b)**2] )
+                         [ ((Xcg_s - obs_pos[0]) / obs_length)**2 
+                          + ((Ycg_s - obs_pos[1]) / obs_width)**2] )
     con_ineq.append(eps - ellipse(x[4], x[5]) + 1)
     con_ineq_ub.append(0)
     con_ineq_lb.append(-np.inf)
@@ -185,34 +185,35 @@ u_test = np.zeros((30, 3))
 # Limits in the MPC problem
 ulb = [-.5, -.034]
 uub = [.5, .034]
-xlb = [10.0, -.5, -.1, -.2, .0, -np.inf]
-xub = [30.0, .5, .1, .2, np.inf, np.inf]
+xlb = [10.0, -.5, -.1, -.3, .0, -np.inf]
+xub = [30.0, .5, .1, .3, np.inf, np.inf]
 x_sp = np.array([5.8, 0., 0., 0., 20., 0. ])
 
 # Constraint parameters
 slip_min = -4.0 * np.pi / 180
 slip_max = 4.0 * np.pi / 180
 road_bound = 2.0
-obs = [40., 0.1]
-a = 20.
-b = .5
+obs_pos = [40., 0.5]
+obs_length = 15.
+obs_width = 1.
 
-
-P = np.diag([0, .1, 10, .1, 0, 1])
-Q = np.diag([0, .1, 10, .1, 0, .1])
+# Penalty values
+P = np.diag([.0, 1., 10, .1, 0, 5])
+Q = np.diag([.0, 1., 1., .01, 0, .1])
 R = np.diag([1, 1])
-S = np.diag([.1, .1])
+S = np.diag([1, 10])
+lam = 100
 
 mpc = MPC(horizon=20*dt, gp=gp, model=model,
           gp_method='EM',
-          ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S,
+          ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
           terminal_constraint=None, costFunc='quad', feedback=False, 
           solver_opts=solver_opts, use_rk4=True,
           inequality_constraints=inequality_constraints
           )
 
 
-x, u = mpc.solve(x0, sim_time=150*dt, x_sp=x_sp, debug=True)
+x, u = mpc.solve(x0, sim_time=200*dt, x_sp=x_sp, debug=False)
 mpc.plot()
 plot_car(x[:, 4], x[:, 5])
 
