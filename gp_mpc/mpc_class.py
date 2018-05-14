@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 import casadi as ca
 import casadi.tools as ctools
 from scipy.stats import norm
-
+import scipy.linalg
 
 
 class MPC:
@@ -82,6 +82,7 @@ class MPC:
         self.__Nx = Nx
         self.__Nu = Nu
         self.__model = model
+        self.__feedback = feedback
 
         """ Default penalty values """
         if P is None:
@@ -94,7 +95,10 @@ class MPC:
             S = np.eye(Nu) * 0.1
         if lam is None:
             lam = 1000
-
+        
+        # Keep these so they can be used with LQR at each step
+        self.__Q = Q
+        self.__R = R
     
         #TODO: Clean this up
         percentile = 0.95
@@ -102,14 +106,15 @@ class MPC:
         quantile_u = np.ones(Nu) * norm.ppf(percentile)
         H_x = ca.MX.eye(Ny)
         H_u = ca.MX.eye(Nu)
-        #K = np.ones((Nu, Ny)) * 0.001
+
 
         # Create parameter symbols
         mean_0_s       = ca.MX.sym('mean_0', Ny)
         mean_ref_s     = ca.MX.sym('mean_ref', Ny)
         u_0_s          = ca.MX.sym('u_0', Nu)
         covariance_0_s = ca.MX.sym('covariance_0', Ny * Ny)
-        param_s        = ca.vertcat(mean_0_s, mean_ref_s, covariance_0_s, u_0_s)
+        K_s            = ca.MX.sym('K', Nu * Ny)
+        param_s        = ca.vertcat(mean_0_s, mean_ref_s, covariance_0_s, u_0_s, K_s)
         
         # Create GP and cos function symbols
         mean_s = ca.MX.sym('mean', Ny)
@@ -117,7 +122,7 @@ class MPC:
         v_s = ca.MX.sym('v', Nu)
         u_s = ca.MX.sym('u', Nu)
         delta_u_s = ca.MX.sym('delta_u', Nu)
-        K_s = ca.MX.sym('K', Nu, Ny)
+        
 
         """ Select wich GP function to use """
         gp.set_method(gp_method)     
@@ -130,7 +135,7 @@ class MPC:
         if costFunc is 'quad':
             l_func = ca.Function('l', [mean_s, covar_x_s, u_s, delta_u_s, K_s],
                                [self.__cost_l(mean_s, mean_ref_s, covar_x_s, u_s, delta_u_s,
-                                           ca.MX(Q), ca.MX(R), ca.MX(S), K_s)])
+                                           ca.MX(Q), ca.MX(R), ca.MX(S), K_s.reshape((Nu, Ny)))])
             lf_func = ca.Function('lf', [mean_s, covar_x_s],
                                    [self.__cost_lf(mean_s, mean_ref_s, 
                                                    covar_x_s,  ca.MX(P))])
@@ -138,7 +143,7 @@ class MPC:
             l_func = ca.Function('l', [mean_s, covar_x_s, u_s, delta_u_s, K_s],
                                [self.__cost_saturation_l(mean_s, mean_ref_s, 
                                     covar_x_s, u_s, delta_u_s, ca.MX(Q), ca.MX(R), 
-                                    ca.MX(S), K_s)])
+                                    ca.MX(S), K_s.reshape((Nu, Ny)))])
             lf_func = ca.Function('lf', [mean_s, covar_x_s],
                                    [self.__cost_saturation_lf(mean_s, 
                                         mean_ref_s, covar_x_s,  ca.MX(P))])
@@ -149,17 +154,17 @@ class MPC:
         """ Feedback function """
         if feedback:
             u_func = ca.Function('u', [mean_s, v_s, K_s],
-                                 [ca.mtimes(K_s, mean_s) + v_s])
+                                 [ca.mtimes(K_s.reshape((Nu, Ny)), mean_s) + v_s])
         else:
             u_func = ca.Function('u', [mean_s, v_s, K_s], [v_s])        
         self.__u_func = u_func
+
 
         """ Create variables struct """
         var = ctools.struct_symMX([(
                 ctools.entry('mean', shape=(Ny,), repeat=Nt + 1),
                 ctools.entry('covariance', shape=(Ny * Ny,), repeat=Nt + 1),
                 ctools.entry('v', shape=(Nu,), repeat=Nt),
-                ctools.entry('K', shape=(Nu*Ny,), repeat=Nt),
                 ctools.entry('eps', repeat=Nt),
         )])
         self.__var = var
@@ -178,9 +183,7 @@ class MPC:
             if xlb is not None:
                 self.__varlb['mean', t] = xlb
 
-            if not feedback:
-                self.__varlb['K', t] = np.full((Nu * Ny,), 0)
-                self.__varub['K', t] = np.full((Nu * Ny,), 0)
+
     
         # Build up constraints and objective
         obj = ca.MX(0)
@@ -197,8 +200,7 @@ class MPC:
 
         for t in range(Nt):
             # Input to GP
-            K_t = var['K', t].reshape((Nu, Ny))
-            u_t = u_func(var['mean', t], var['v', t], K_t)
+            u_t = u_func(var['mean', t], var['v', t], K_s)
 
             covar_x_t = var['covariance', t].reshape((Ny, Ny))
             covar_t[:Ny, :Ny] = covar_x_t
@@ -245,7 +247,7 @@ class MPC:
             
             # Objective function
             u_delta = u_t - u_past
-            obj += l_func(var['mean', t], covar_x_t, u_t, u_delta, K_t) + lam * var['eps', t]
+            obj += l_func(var['mean', t], covar_x_t, u_t, u_delta, K_s) + lam * var['eps', t]
             u_t = u_past
         obj += lf_func(var['mean', Nt], var['covariance', Nt].reshape((Ny, Ny)))
     
@@ -350,11 +352,17 @@ class MPC:
         print('\nSolving MPC with %d step horizon' % Nt)
         for t in range(self.__Nsim):
             solve_time = -time.time()
-
-            # Initial values
+            
+            # Linearize around operating point and calculate LQR gain matrix
+            if self.__feedback:
+                Ad, Bd = self.__model.discrete_linearize(self.__mean[t, :], u0)
+                K, S, E = self.dlqr(Ad, Bd, self.__Q, self.__R)
+            else:
+                K = np.zeros((Nu, Ny))
+            
+            """ Initial values """
             param  = ca.vertcat(self.__mean[t, :], self.__x_sp, 
-                                self.__covariance[t, :].flatten(), u0)
-    
+                                self.__covariance[t, :].flatten(), u0, K.flatten())
             args = dict(x0=self.__var_init,
                         lbx=self.__varlb,
                         ubx=self.__varub,
@@ -364,7 +372,7 @@ class MPC:
                         lam_g0=self.__lam_g0,
                         p=param)
             
-            # Solve nlp
+            """ Solve nlp"""
             sol             = self.__solver(**args)
             status          = self.__solver.stats()['return_status']
             optvar          = self.__var(sol['x'])
@@ -372,7 +380,7 @@ class MPC:
             self.__lam_x0   = sol['lam_x']
             self.__lam_g0   = sol['lam_g']
 
-            # Print status
+            """ Print status """
             solve_time     += time.time()
             print("* t=%f: %s - %f sec" % (t * self.__dt, status, solve_time))
 
@@ -383,14 +391,14 @@ class MPC:
                      self.__mean_prediction[i, :] = np.array(optvar['mean', i]).flatten()
     
             v = optvar['v', 0, :]
-            K = np.array(optvar['K', 0]).reshape((Nu, Ny))
-            self.__u[t, :] = np.array(self.__u_func(self.__mean[t, :], v, K)).flatten()
+
+            self.__u[t, :] = np.array(self.__u_func(self.__mean[t, :], v, K.flatten())).flatten()
             self.__covariance[t + 1, :] = np.array(optvar['covariance', -1, :].reshape((Ny, Ny)))
             
             if debug:
                 self.__debug(t)
             
-            # Simulate the next step
+            """ Simulate the next step """
             self.__mean[t + 1] = self.__model.sim(self.__mean[t], 
                                        self.__u[t].reshape((1, Nu)), noise=True)
         return self.__mean, self.__u
@@ -499,7 +507,33 @@ class MPC:
         for i in range(ca.MX.size1(mean)):
             con.append(con_func(mean, covar, H[i, :], quantile[i]))
         return con
+    
+    
+    def lqr(self, A, B, Q, R):
+        """Solve the continuous time lqr controller
+            dx/dt = A x + B u
+            cost = integral x.T*Q*x + u.T*R*u
+        """
+     
+        S = np.array(scipy.linalg.solve_continuous_are(A, B, Q, R))
+        K = np.array(scipy.linalg.inv(R) @ (B.T @ S))
+        eigVals, eigVecs = scipy.linalg.eig(A - B @ K)
+         
+        return K, S, eigVals
 
+
+    def dlqr(self, A, B, Q, R):
+        """Solve the discrete time lqr controller
+            x[k+1] = A x[k] + B u[k]
+            cost = sum x[k].T*Q*x[k] + u[k].T*R*u[k]
+        """
+     
+        S = np.array(scipy.linalg.solve_discrete_are(A, B, Q, R))
+        K = np.array(scipy.linalg.inv(B.T @ S @ B + R) @ (B.T @ S @ A))
+        eigVals, eigVecs = scipy.linalg.eig(A - B @ K)
+         
+        return K, S, eigVals
+    
 
     def __debug(self, t):
         print('_______________  Debug  ________________')
@@ -508,7 +542,6 @@ class MPC:
         print('* u_%d:' % t)
         print(self.__u[t])
         print('----------------------------------------')
-
 
 
     def plot(self, title=None,

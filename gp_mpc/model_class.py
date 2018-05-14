@@ -70,7 +70,7 @@ class Model:
                                       [alg_0(x, u)])
             dae.update({'z':z, 'alg': alg(x, z, u)})
 
-            
+
         self.__I = ca.integrator('I', 'idas', dae, options)
 #        self.__I = ca.integrator('I', 'cvodes', dae, options)
 
@@ -84,6 +84,42 @@ class Model:
             k4 = ode_casadi(x + dt*k3,u, p)
             xrk4 = x + dt/6*(k1 + 2*k2 + 2*k3 + k4)    
             self.rk4 = ca.Function("ode_rk4", [x, u, p], [xrk4])
+
+
+        self.__jac_x = ca.Function('jac_x', [x, u, p], 
+                                   [ca.jacobian(ode_casadi(x,u,p), x)])
+        self.__jac_u = ca.Function('jac_x', [x, u, p], 
+                                   [ca.jacobian(ode_casadi(x,u,p), u)])
+        
+        self.__discrete_jac_x = ca.Function('jac_x', [x, u, p], 
+                                   [ca.jacobian(self.rk4(x,u,p), x)])
+        self.__discrete_jac_u = ca.Function('jac_x', [x, u, p], 
+                                   [ca.jacobian(self.rk4(x,u,p), u)])
+
+
+    def linearize(self, x0, u0, p0=[]):
+        """ Linearize the system around operating point
+            dx/dt = Ax + Bu
+        # Arguments:
+            x0: State vector
+            u0: Input vector
+            p0: Parameter vector (optional)
+        """
+        A = np.array(self.__jac_x(x0, u0, p0))
+        B = np.array(self.__jac_u(x0, u0, p0))
+        return A, B
+
+    def discrete_linearize(self, x0, u0, p0=[]):
+        """ Linearize the discrete system around operating point
+            x[k+1] = Ax[k] + Bu[k]
+        # Arguments:
+            x0: State vector
+            u0: Input vector
+            p0: Parameter vector (optional)
+        """
+        Ad = np.array(self.__discrete_jac_x(x0, u0, p0))
+        Bd = np.array(self.__discrete_jac_u(x0, u0, p0))
+        return Ad, Bd
 
 
     def sampling_time(self):
