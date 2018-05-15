@@ -14,17 +14,17 @@ import numpy as np
 import casadi as ca
 import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
-from .gp_functions import gp_exact_moment, gp_taylor_approx, gp
+from .gp_functions import gp_exact_moment, gp_taylor_approx, gp, gp_test
 from .optimize import train_gp, validate
 
 
 class GP:
-    def __init__(self, X, Y, mean_func='zero', gp_method='TA', 
+    def __init__(self, X, Y, mean_func='zero', gp_method='TA',
                  optimizer_opts=None):
         """ Initialize and optimize GP model
-        
+
         """
-        
+
         self.__Ny = Y.shape[1]
         self.__Nx = X.shape[1]
         self.__N = X.shape[0]
@@ -33,9 +33,9 @@ class GP:
         self.__Y = Y
         self.__mean_func = mean_func
         self.__gp_method = gp_method
-        
+
         """ Optimize hyperparameters """
-        opt = train_gp(self.__X, self.__Y, meanFunc=self.__mean_func, 
+        opt = train_gp(self.__X, self.__Y, meanFunc=self.__mean_func,
                        optimizer_opts=optimizer_opts)
         self.__hyper = opt['hyper']
         self.__invK  = opt['invK']
@@ -44,18 +44,19 @@ class GP:
         self.__hyper_signal_variance = self.__hyper[:, self.__Nx]**2
         self.__hyper_noise_variance = self.__hyper[:, self.__Nx + 1]**2
         self.__hyper_mean           = self.__hyper[:, (self.__Nx + 1):]
-        
+
         self.set_method(gp_method)
+
 
 
     def validate(self, X_test, Y_test):
         """ Validate GP model with test data """
-        SMSE = validate(X_test, Y_test, self.__X, self.__Y, self.__invK, 
+        SMSE = validate(X_test, Y_test, self.__X, self.__Y, self.__invK,
                  self.__hyper, self.__mean_func)
         self._SMSE = np.max(SMSE)
 
 
-    def set_method(self, gp_method='TA'):   
+    def set_method(self, gp_method='TA'):
         """ Select wich GP function to use """
 
         x = ca.MX.sym('x', self.__Ny)
@@ -68,43 +69,65 @@ class GP:
                                 gp(self.__invK, ca.MX(self.__X), ca.MX(self.__Y),
                                    ca.MX(self.__hyper),
                                    ca.vertcat(x, u).T, meanFunc=self.__mean_func))
+        elif gp_method is 'test':
+            self.predict = ca.Function('gp_test', [x, u],
+                                [gp_test(self.__invK, ca.MX(self.__X), ca.MX(self.__Y),
+                                   ca.MX(self.__hyper), x, u)])
+            self.__discrete_jac_x = ca.Function('jac_x', [x, u],
+                                      [ca.jacobian(self.predict(x,u), x)])
+            self.__discrete_jac_u = ca.Function('jac_x', [x, u],
+                                      [ca.jacobian(self.predict(x,u), u)])
         elif gp_method is 'TA':
             self.predict = ca.Function('gp_taylor_approx', [x, u, covar_s],
-                                gp_taylor_approx(self.__invK, ca.MX(self.__X), 
-                                        ca.MX(self.__Y), ca.MX(self.__hyper), 
-                                        ca.vertcat(x, u).T, covar_s, 
+                                gp_taylor_approx(self.__invK, ca.MX(self.__X),
+                                        ca.MX(self.__Y), ca.MX(self.__hyper),
+                                        ca.vertcat(x, u).T, covar_s,
                                         meanFunc=self.__mean_func, diag=True))
         elif gp_method is 'EM':
             self.predict = ca.Function('gp_exact_moment', [x, u, covar_s],
-                                gp_exact_moment(self.__invK, ca.MX(self.__X), 
-                                        ca.MX(self.__Y), ca.MX(self.__hyper), 
+                                gp_exact_moment(self.__invK, ca.MX(self.__X),
+                                        ca.MX(self.__Y), ca.MX(self.__hyper),
                                         ca.vertcat(x, u).T, covar_s))
         else:
             raise NameError('No GP method called: ' + gp_method)
 
+
+
+
+    def discrete_linearize(self, x0, u0):
+        """ Linearize the discrete system around operating point
+            x[k+1] = Ax[k] + Bu[k]
+        # Arguments:
+            x0: State vector
+            u0: Input vector
+            cov0: Covariance
+        """
+        Ad = np.array(self.__discrete_jac_x(x0, u0))
+        Bd = np.array(self.__discrete_jac_u(x0, u0))
+        return Ad, Bd
 
     def noise_variance(self):
         """ Get the noise variance
         """
         return self.__hyper_noise_variance
 
-    
+
     def sparse(self, M):
         """ Sparse Gaussian Process
             Use Fully Independent Training Conditional (FITC) to approximate
             the GP distribution and reduce computational complexity.
-        
+
         # Arguments:
             M: Reduce the model size from N to M.
         """
-    
+
     def predict_compare(self, x0, u, model, num_cols=2, xnames=None, title=None,):
         """ Predict and compare all GP methods
         """
         # Predict future
         Nx = self.__Nx
         Ny = self.__Ny
-        
+
         dt = model.sampling_time()
         Nt = np.size(u, 0)
         sim_time = Nt * dt
@@ -112,8 +135,8 @@ class GP:
         methods = ['EM', 'TA', 'ME']
         mean = np.zeros((len(methods), Nt + 1 , Ny))
         var = np.zeros((len(methods), Nt + 1, Ny))
-        covar = np.eye(Nx) * 1e-5 # Initial covar input matrix    
-        
+        covar = np.eye(Nx) * 1e-5 # Initial covar input matrix
+
         for i in range(len(methods)):
             self.set_method(methods[i])
             mean_t = x0
@@ -124,8 +147,8 @@ class GP:
                 mean[i, t, :] = np.array(mean_t).reshape((Ny,))
                 var[i, t, :] = np.diag(covar_x)
                 covar[:Ny, :Ny] = covar_x
-            
-    
+
+
         t = np.linspace(0.0, sim_time, Nt + 1)
         Y_sim = model.sim(x0, u)
         Y_sim = np.vstack([x0, Y_sim])
@@ -134,18 +157,18 @@ class GP:
         num_rows = int(np.ceil(Ny / num_cols))
         if xnames is None:
             xnames = ['State %d' % (i + 1) for i in range(Ny)]
-        
+
         fontP = FontProperties()
         fontP.set_size('small')
         fig = plt.figure()
         for i in range(Ny):
             ax = fig.add_subplot(num_rows, num_cols, i + 1)
             ax.plot(t, Y_sim[:, i], 'b-', label='Simulation')
-            
+
             for k in range(len(methods)):
                 mean_i = mean[k, :, i]
-                sd_i = np.sqrt(var[k, :, i])        
-                ax.errorbar(t, mean_i, yerr=2 * sd_i, 
+                sd_i = np.sqrt(var[k, :, i])
+                ax.errorbar(t, mean_i, yerr=2 * sd_i,
                              label='GP ' + methods[k])
             ax.set_ylabel(xnames[i])
             ax.legend(prop=fontP, loc='best')
@@ -155,10 +178,5 @@ class GP:
         else:
             fig.canvas.set_window_title(('Training data: {x},  Mean Function: {y},  '
                                          'Max Standarized Mean Squared Error: {z:.3g}'
-                                        ).format(x=self.__N, y=self.__mean_func, 
+                                        ).format(x=self.__N, y=self.__mean_func,
                                                 z=self._SMSE))
-
-        
-    
-
-        

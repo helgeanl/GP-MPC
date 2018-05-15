@@ -63,6 +63,71 @@ def get_mean_function(hyper, X, func='zero'):
     return ca.Function('mean', [Z_s], [meanF(Z_s, hyper)])
 
 
+def gp_test(invK, X, Y, hyper, x, u):
+    """ Gaussian Process
+
+    # Arguments
+        invK: Array with the inverse covariance matrices of size (Ny x N x N),
+            with Ny number of outputs from the GP and N number of training points.
+        X: Training data matrix with inputs of size (N x Nx), with Nx number of
+            inputs to the GP.
+        Y: Training data matrix with outpyts of size (N x Ny).
+        hyper: Array with hyperparame|ters [ell_1 .. ell_Nx sf sn].
+        inputmean: Input to the GP of size (1 x Nx)
+
+    # Returns
+        mean: The estimated mean.
+        var: The estimated variance
+    """
+
+    z = ca.vertcat(x, u)
+
+    Ny = len(invK)
+    N, Nx = ca.MX.size(X)
+
+    mean  = ca.MX.zeros(Ny, 1)
+    var  = ca.MX.zeros(Ny, 1)
+
+    # Casadi symbols
+    x_s     = ca.SX.sym('x', Nx)
+    z_s     = ca.SX.sym('z', Nx)
+    ell_s   = ca.SX.sym('ell', Nx)
+    sf2_s   = ca.SX.sym('sf2')
+
+    invK_s  = ca.SX.sym('invK', N, N)
+    Y_s     = ca.SX.sym('Y', N)
+    ks_s    = ca.SX.sym('ks', N)
+    kss_s   = ca.SX.sym('kss')
+    ksT_invK_s = ca.SX.sym('ksT_invK', 1, N)
+
+
+    covSE = ca.Function('covSE', [x_s, z_s, ell_s, sf2_s],
+                          [covSEard(x_s, z_s, ell_s, sf2_s)])
+
+    ksT_invK_func = ca.Function('ksT_invK', [ks_s, invK_s],
+                           [ca.mtimes(ks_s.T, invK_s)])
+
+    mean_func = ca.Function('mean', [ksT_invK_s, Y_s],
+                           [ca.mtimes(ksT_invK_s, Y_s )])
+
+
+    for output in range(Ny):
+        ell = ca.MX(hyper[output, 0:Nx])
+        sf2 = ca.MX(hyper[output, Nx]**2)
+
+        kss = covSE(z, z, ell, sf2)
+        ks = ca.MX.zeros(N, 1)
+        for i in range(N):
+            ks[i] = covSE(X[i, :], z, ell, sf2)
+
+        ksT_invK = ksT_invK_func(ks, ca.MX(invK[output]))
+
+        mean[output] = mean_func(ksT_invK, Y[:, output])
+
+
+    return mean
+
+
 def gp(invK, X, Y, hyper, inputmean,  alpha=None, meanFunc='zero', log=False):
     """ Gaussian Process
 
@@ -83,7 +148,7 @@ def gp(invK, X, Y, hyper, inputmean,  alpha=None, meanFunc='zero', log=False):
         X = ca.log(X)
         Y = ca.log(Y)
         inputmean = ca.log(inputmean)
-    
+
     Ny = len(invK)
     N, Nx = ca.MX.size(X)
 
@@ -95,7 +160,7 @@ def gp(invK, X, Y, hyper, inputmean,  alpha=None, meanFunc='zero', log=False):
     z_s     = ca.SX.sym('z', Nx)
     ell_s   = ca.SX.sym('ell', Nx)
     sf2_s   = ca.SX.sym('sf2')
-    
+
     invK_s  = ca.SX.sym('invK', N, N)
     Y_s     = ca.SX.sym('Y', N)
     m_s     = ca.SX.sym('m')
@@ -103,21 +168,21 @@ def gp(invK, X, Y, hyper, inputmean,  alpha=None, meanFunc='zero', log=False):
     kss_s   = ca.SX.sym('kss')
     ksT_invK_s = ca.SX.sym('ksT_invK', 1, N)
     alpha_s = ca.SX.sym('alpha', N)
-    
+
     covSE = ca.Function('covSE', [x_s, z_s, ell_s, sf2_s],
                           [covSEard(x_s, z_s, ell_s, sf2_s)])
-    
-    ksT_invK_func = ca.Function('ksT_invK', [ks_s, invK_s], 
+
+    ksT_invK_func = ca.Function('ksT_invK', [ks_s, invK_s],
                            [ca.mtimes(ks_s.T, invK_s)])
 
     if alpha is not None:
-        mean_func = ca.Function('mean', [ks_s, alpha_s], 
+        mean_func = ca.Function('mean', [ks_s, alpha_s],
                            [ca.mtimes(ks_s.T, alpha_s)])
-    else:    
-        mean_func = ca.Function('mean', [ksT_invK_s, Y_s, m_s], 
+    else:
+        mean_func = ca.Function('mean', [ksT_invK_s, Y_s, m_s],
                            [ca.mtimes(ksT_invK_s, Y_s - m_s) + m_s])
 
-    var_func  = ca.Function('var', [kss_s, ksT_invK_s, ks_s], 
+    var_func  = ca.Function('var', [kss_s, ksT_invK_s, ks_s],
                             [kss_s - ca.mtimes(ksT_invK_s, ks_s)])
 
     for output in range(Ny):
@@ -129,18 +194,18 @@ def gp(invK, X, Y, hyper, inputmean,  alpha=None, meanFunc='zero', log=False):
         ks = ca.MX.zeros(N, 1)
         for i in range(N):
             ks[i] = covSE(X[i, :], inputmean, ell, sf2)
-        
+
         ksT_invK = ksT_invK_func(ks, ca.MX(invK[output]))
         if alpha is not None:
             mean[output] = mean_func(ks, ca.MX(alpha[output]))
         else:
             mean[output] = mean_func(ksT_invK, Y[:, output], m(inputmean))
         var[output] = var_func(kss, ks, ksT_invK)
-    
+
     if log:
         mean = ca.exp(mean)
         var = ca.exp(var)
-        
+
     covar = ca.diag(var)
     return mean, covar
 
@@ -182,7 +247,7 @@ def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputcovar,
     covariance = ca.MX.zeros(Ny, Ny)
     d_mean     = ca.MX.zeros(Ny, 1)
     dd_var     = ca.MX.zeros(Ny, Ny)
-    
+
 
     # Casadi symbols
     x_s     = ca.SX.sym('x', Nx)
@@ -221,7 +286,7 @@ def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputcovar,
 
         mean_mat = ca.mtimes(d_mean, d_mean.T)
         covar_temp[0, 0] = inputcovar[a, a]
-        covariance[a, a] = var[a] + ca.trace(ca.mtimes(covar_temp, .5 
+        covariance[a, a] = var[a] + ca.trace(ca.mtimes(covar_temp, .5
                                          * dd_var + mean_mat))
 
     return [mean, covariance]
@@ -267,7 +332,7 @@ def gp_exact_moment(invK, X, Y, hyper, inputmean, inputcov):
         beta[:, a] = ca.mtimes(invK[a], Y[:, a])
         iLambda   = ca.diag(ca.exp(-2 * hyper[a, :Nx]))
         R  = inputcov + ca.diag(ca.exp(2 * hyper[a, :Nx]))
-        iR = ca.mtimes(iLambda, (ca.MX.eye(Nx) - ca.solve((ca.MX.eye(Nx) 
+        iR = ca.mtimes(iLambda, (ca.MX.eye(Nx) - ca.solve((ca.MX.eye(Nx)
                 + ca.mtimes(inputcov, iLambda)), (ca.mtimes(inputcov, iLambda)))))
         T  = ca.mtimes(v, iR)
         c  = ca.exp(2 * hyper[a, Nx]) / ca.sqrt(determinant(R)) \
@@ -283,12 +348,12 @@ def gp_exact_moment(invK, X, Y, hyper, inputmean, inputcov):
     for a in range(Ny):
         ii = v / ca.repmat(ca.exp(2 * hyper[a, :Nx]), N, 1)
         for b in range(a + 1):
-            R = ca.mtimes(inputcov, ca.diag(ca.exp(-2 * hyper[a, :Nx]) 
+            R = ca.mtimes(inputcov, ca.diag(ca.exp(-2 * hyper[a, :Nx])
                 + ca.exp(-2 * hyper[b, :Nx]))) + ca.MX.eye(Nx)
             t = 1.0 / ca.sqrt(determinant(R))
             ij = v / ca.repmat(ca.exp(2 * hyper[b, :Nx]), N, 1)
-            Q = ca.exp(ca.repmat(log_k[:, a], 1, N) 
-                + ca.repmat(ca.transpose(log_k[:, b]), N, 1) 
+            Q = ca.exp(ca.repmat(log_k[:, a], 1, N)
+                + ca.repmat(ca.transpose(log_k[:, b]), N, 1)
                 + maha(ii, -ij, ca.solve(R, inputcov * 0.5), N))
             A = ca.mtimes(beta[:, a], ca.transpose(beta[:, b]))
             if b == a:
@@ -329,7 +394,7 @@ def predict(X, Y, invK, hyper, x0, u, sim_system):
 
     mu_EM = np.zeros((Nt, Ny))
     var_EM = np.zeros((Nt, Ny))
-    
+
 
     mu_ME = np.zeros((Nt, Ny))
     var_ME = np.zeros((Nt, Ny))
@@ -348,7 +413,7 @@ def predict(X, Y, invK, hyper, x0, u, sim_system):
                         gp_exact_moment(invK, X_s, Y_s, hyp_s, z_s, cov_s))
     gp_TA = ca.Function('gp_taylor_approx', [X_s, Y_s, hyp_s, z_s, cov_s],
                         gp_taylor_approx(invK, X_s, Y_s, hyp_s, z_s, cov_s))
-    gp_simple = ca.Function('gp_simple', [X_s, Y_s, hyp_s, z_s], 
+    gp_simple = ca.Function('gp_simple', [X_s, Y_s, hyp_s, z_s],
                             gp(invK, X_s, Y_s, hyp_s, z_s, meanFunc='zero'))
 
     mu = x0

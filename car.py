@@ -34,6 +34,7 @@ def plot_car(x ,y):
     ax.plot(x, y, 'b-', linewidth=1.0)
     ax.set_ylabel('y [m]')
     ax.set_xlabel('x [m]')
+    plt.show()
 
 
 def ode(x, u, z, p):
@@ -70,15 +71,15 @@ def inequality_constraints(x, covar, u, eps):
     con_ineq = []
     con_ineq_lb = []
     con_ineq_ub = []
-    
+
     """ Slip angle constraint """
-    dx_s = ca.SX.sym('dx')    
+    dx_s = ca.SX.sym('dx')
     dy_s = ca.SX.sym('dy')
     dpsi_s = ca.SX.sym('dpsi')
-    delta_f_s = ca.SX.sym('delta_f') 
-    lf  = 2.0 
+    delta_f_s = ca.SX.sym('delta_f')
+    lf  = 2.0
     lr  = 2.0
-    
+
     slip_f = ca.Function('slip_f', [dx_s, dy_s, dpsi_s, delta_f_s],
                          [(dy_s + lf*dpsi_s)/(dx_s + 1e-6)   - delta_f_s])
     slip_r = ca.Function('slip_r', [dx_s, dy_s, dpsi_s],
@@ -87,34 +88,34 @@ def inequality_constraints(x, covar, u, eps):
     con_ineq.append(slip_f(x[0], x[1], x[2], u[1]) - slip_max - eps)
     con_ineq_ub.append(0)
     con_ineq_lb.append(-np.inf)
-    
+
     con_ineq.append(slip_min - slip_f(x[0], x[1], x[2], u[1]) - eps)
     con_ineq_ub.append(0)
     con_ineq_lb.append(-np.inf)
-    
+
     con_ineq.append(slip_r(x[0], x[1], x[2]) - slip_max - eps)
     con_ineq_ub.append(0)
     con_ineq_lb.append(-np.inf)
-    
+
     con_ineq.append(slip_min - slip_r(x[0], x[1], x[2]) - eps)
     con_ineq_ub.append(0)
     con_ineq_lb.append(-np.inf)
-    
+
     """ Add road boundry constraints """
     con_ineq.append(x[5])
     con_ineq_ub.append(road_bound)
     con_ineq_lb.append(-road_bound)
-    
+
     """ Obstacle avoidance """
-#    Xcg_s = ca.SX.sym('Xcg')
-#    Ycg_s = ca.SX.sym('Ycg')
-#    ellipse = ca.Function('ellipse', [Xcg_s, Ycg_s],
-#                         [ ((Xcg_s - obs_pos[0]) / obs_length)**2 
-#                          + ((Ycg_s - obs_pos[1]) / obs_width)**2] )
-#    con_ineq.append(eps - ellipse(x[4], x[5]) + 1)
-#    con_ineq_ub.append(0)
-#    con_ineq_lb.append(-np.inf)
-    
+    Xcg_s = ca.SX.sym('Xcg')
+    Ycg_s = ca.SX.sym('Ycg')
+    ellipse = ca.Function('ellipse', [Xcg_s, Ycg_s],
+                         [ ((Xcg_s - obs_pos[0]) / obs_length)**2
+                          + ((Ycg_s - obs_pos[1]) / obs_width)**2] )
+    con_ineq.append(eps - ellipse(x[4], x[5]) + 1)
+    con_ineq_ub.append(0)
+    con_ineq_lb.append(-np.inf)
+
     cons = dict(con_ineq=con_ineq,
                 con_ineq_lb=con_ineq_lb,
                 con_ineq_ub=con_ineq_ub
@@ -127,13 +128,13 @@ solver_opts = {}
 solver_opts['ipopt.linear_solver'] = 'ma27'
 solver_opts['ipopt.max_cpu_time'] = 10
 #solver_opts['ipopt.max_iter'] = 100
-solver_opts['expand']= False    
+solver_opts['expand']= False
 
 meanFunc = 'zero'
 dt = 0.05
 Nx = 6
 Nu = 2
-R = np.eye(Nx) * 1e-5 
+R = np.eye(Nx) * 1e-5
 
 # Limits in the training data
 ulb = [-.5, -.034]
@@ -147,14 +148,21 @@ N = 2 # Number of training data
 model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R)
 X, Y           = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 X_test, Y_test = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
-#
+
+
+
+
+
 ## Create GP model
-gp = GP(X, Y)
-gp.validate(X_test, Y_test)
+gp = GP(X, Y, gp_method='TA')
+#gp.validate(X_test, Y_test)
 
 x0 = np.array([13.89, 0.0, 0.0, 0.0, 1.0 , 0.0])
 u0 = [0, 0]
+cov0 = np.eye(Nx+Nu)
 u_test = np.zeros((30, 2))
+
+#A, B = gp.discrete_linearize(x0, u0)
 #gp.predict_compare(x0, u_test, model)
 
 # Limits in the MPC problem
@@ -168,7 +176,7 @@ x_sp = np.array([5.8, 0., 0., 0., 20., 0. ])
 slip_min = -4.0 * np.pi / 180
 slip_max = 4.0 * np.pi / 180
 road_bound = 2.0
-obs_pos = [40., 0.3]
+obs_pos = [30., 0.3]
 obs_length = 15.
 obs_width = 1.
 
@@ -185,20 +193,21 @@ lam = 10
 #R = np.eye(2)
 
 
-
-mpc = MPC(horizon=20*dt, gp=gp, model=model,
+#
+mpc = MPC(horizon=10*dt, gp=gp, model=model,
           gp_method='TA',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
-          terminal_constraint=None, costFunc='quad', feedback=True, 
+          terminal_constraint=None, costFunc='quad', feedback=False,
           solver_opts=solver_opts, use_rk4=True,
           inequality_constraints=inequality_constraints
           )
-#
-#
-x, u = mpc.solve(x0, sim_time=150*dt, x_sp=x_sp, debug=False)
-#mpc.plot()
-#plot_car(x[:, 4], x[:, 5])
-#
+
+
+x, u = mpc.solve(x0, sim_time=30*dt, x_sp=x_sp, debug=True)
+mpc.plot()
+plot_car(x[:, 4], x[:, 5])
+u1 = u[:10,:]
+model.predict_compare(x0, u1)
 ## Use previous data to train GP
 #X = x[:-1,:]
 #Y = x[1:,:]
