@@ -191,6 +191,7 @@ class Model:
             except RuntimeError:
                 print('----------------------------------------')
                 print('** System unstable, simulator crashed **')
+                print('** t: %d **' % t)
                 print('----------------------------------------')
                 return Y
             Y[t, :] = x

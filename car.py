@@ -176,7 +176,7 @@ x_sp = np.array([5.8, 0., 0., 0., 20., 0. ])
 slip_min = -4.0 * np.pi / 180
 slip_max = 4.0 * np.pi / 180
 road_bound = 2.0
-obs_pos = [30., 0.3]
+obs_pos = [40., 0.3]
 obs_length = 15.
 obs_width = 1.
 
@@ -194,7 +194,7 @@ lam = 10
 
 
 #
-mpc = MPC(horizon=10*dt, gp=gp, model=model,
+mpc = MPC(horizon=20*dt, gp=gp, model=model,
           gp_method='TA',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
           terminal_constraint=None, costFunc='quad', feedback=False,
@@ -203,7 +203,7 @@ mpc = MPC(horizon=10*dt, gp=gp, model=model,
           )
 
 
-x, u = mpc.solve(x0, sim_time=30*dt, x_sp=x_sp, debug=True)
+x, u = mpc.solve(x0, sim_time=10*dt, x_sp=x_sp, debug=True)
 mpc.plot()
 plot_car(x[:, 4], x[:, 5])
 u1 = u[:10,:]
