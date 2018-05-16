@@ -32,7 +32,10 @@ def plot_car(x ,y):
     ax.axhline(y=-road_bound, color='r', linestyle='-')
     for i in range(np.size(obs_pos,0)):
         ell = Ellipse(xy=obs_pos[i], width=obs_length*2, height=obs_width*2)
+        obs = Ellipse(xy=obs_pos[i], width=1, height=1)
         ax.add_artist(ell)
+        ax.add_artist(obs)
+        obs.set_facecolor('red')
 
     ax.plot(x, y, 'b-', linewidth=1.0)
     ax.set_ylabel('y [m]')
@@ -74,9 +77,10 @@ def constraint_parameters(x):
 #    obs_pos = np.array([[30, .3],
 #               [60, -0.5]])
     car_pos = x[4:]
-    dist = np.sqrt((car_pos[0] - obs_pos[:,0])**2 + (car_pos[1] - obs_pos[:, 1])**2 )
-    
-#    no_obs = car_pos * 1000
+    dist = np.sqrt((car_pos[0] - obs_pos[:,0])**2 
+                   + (car_pos[1] - obs_pos[:, 1])**2 )
+    if min(dist) > 40:
+        return car_pos * 1000
 
     return obs_pos[np.argmin(dist)]
 
@@ -127,7 +131,8 @@ def inequality_constraints(x, covar, u, eps, par):
     ellipse = ca.Function('ellipse', [Xcg_s, Ycg_s, pos_s],
                           [ ((Xcg_s - pos_s[0]) / obs_length)**2
                            + ((Ycg_s - pos_s[1]) / obs_width)**2] )
-    con_ineq.append(eps - ellipse(x[4], x[5], par) + 1)
+    con_ineq.append(1 - ellipse(x[4], x[5], par) + eps)
+    
     con_ineq_ub.append(0)
     con_ineq_lb.append(-np.inf)
 
@@ -142,7 +147,7 @@ def inequality_constraints(x, covar, u, eps, par):
 solver_opts = {}
 solver_opts['ipopt.linear_solver'] = 'ma27'
 solver_opts['ipopt.max_cpu_time'] = 20
-#solver_opts['ipopt.max_iter'] = 100
+#solver_opts['ipopt.max_iter'] = 75
 solver_opts['expand']= True
 
 meanFunc = 'zero'
@@ -191,10 +196,10 @@ x_sp = np.array([5.8, 0., 0., 0., 20., 0. ])
 slip_min = -4.0 * np.pi / 180
 slip_max = 4.0 * np.pi / 180
 road_bound = 2.0
-obs_pos = np.array([[30, .3],
+obs_pos = np.array([[40, .3],
                [80, -0.5],
                [130, 0.]])
-obs_length = 15.
+obs_length = 10.
 obs_width = 1.
 
 # Penalty values
@@ -212,28 +217,28 @@ lam = 10
 #
 #
 mpc = MPC(horizon=20*dt, gp=gp, model=model,
-          discrete_method='rk4', gp_method='TA',
+          discrete_method='rk4', gp_method='TA', 
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
-          terminal_constraint=None, costFunc='quad', feedback=False,
+          terminal_constraint=None, costFunc='quad', feedback=True,
           solver_opts=solver_opts, 
           inequality_constraints=inequality_constraints, num_con_par=2
           )
 
 
-x, u = mpc.solve(x0, sim_time=300*dt, x_sp=x_sp, debug=False, 
+x, u = mpc.solve(x0, sim_time=200*dt, x_sp=x_sp, debug=False, noise=False,
                  con_par_func=constraint_parameters)
 #mpc.plot()
 plot_car(x[:, 4], x[:, 5])
 u1 = u[:20,:]
 #model.predict_compare(x[0], u1)
 ## Use previous data to train GP
-#X = x[:-1,:]
-#Y = x[1:,:]
-#Z = np.hstack([X, u])
-#Z1 = Z[::3,:]
-#Y1 = Y[ ::3,:]
-#Z2 = Z[1::3,:]
-#Y2 = Y[ 1::3,:]
+X = x[:-1,:]
+Y = x[1:,:]
+Z = np.hstack([X, u])
+Z1 = Z[:50,:]
+Y1 = Y[ :50,:]
+Z2 = Z[50:-1,:]
+Y2 = Y[ 50:-1,:]
 #gp = GP(Z1, Y1)
 #gp.validate(Z2, Y2)
 #gp.predict_compare(x0, u[:10,:], model)

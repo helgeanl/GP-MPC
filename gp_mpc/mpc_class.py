@@ -23,8 +23,8 @@ class MPC:
                  Q=None, P=None, R=None, S=None, lam=None,
                  ulb=None, uub=None, xlb=None, xub=None, terminal_constraint=None,
                  feedback=True, gp_method='TA', costFunc='quad', solver_opts=None,
-                 discrete_method='gp', inequality_constraints=None, num_con_par=0,
-                 parameters=None):
+                 discrete_method='gp', inequality_constraints=None, num_con_par=0
+                 ):
 
         """ Initialize and build the MPC solver
 
@@ -162,7 +162,7 @@ class MPC:
         """ Feedback function """
         if feedback:
             u_func = ca.Function('u', [mean_s, v_s, K_s],
-                                 [ca.mtimes(K_s.reshape((Nu, Ny)), mean_s) + v_s])
+                                 [v_s - ca.mtimes(K_s.reshape((Nu, Ny)), mean_s)])
         else:
             u_func = ca.Function('u', [mean_s, v_s, K_s], [v_s])
         self.__u_func = u_func
@@ -313,7 +313,8 @@ class MPC:
         print('----------------------------------------')
 
 
-    def solve(self, x0, sim_time, x_sp=None, u0=None, debug=False, con_par_func=None):
+    def solve(self, x0, sim_time, x_sp=None, u0=None, debug=False, noise=False,
+              con_par_func=None):
         """ Solve the optimal control problem
 
         # Arguments:
@@ -323,9 +324,10 @@ class MPC:
         # Optional Arguments:
             x_sp: State set point, default is zero
             u0: Initial input
+            noise: If True, add gaussian noise to the simulation
             con_par_func: Function to calculate the parameters to pass to the 
                           inequality function, inputs the current state.
-
+                          
         # Returns:
             mean: Simulated output using the optimal control inputs
             u: Optimal control inputs
@@ -362,18 +364,18 @@ class MPC:
         self.__var_init['covariance', 0] = self.__covariance[0].flatten()
         self.__lam_x0 = np.zeros(self.__num_var)
         self.__lam_g0 = 0
+        
+        # Linearize around operating point and calculate LQR gain matrix
+        if self.__feedback:
+            Ad, Bd = self.__model.discrete_linearize(x0, u0)
+            K, S, E = lqr(Ad, Bd, self.__Q, self.__R)
+        else:
+            K = np.zeros((Nu, Ny))
 
         print('\nSolving MPC with %d step horizon' % Nt)
         for t in range(self.__Nsim):
             solve_time = -time.time()
 
-            # Linearize around operating point and calculate LQR gain matrix
-            if self.__feedback:
-                Ad, Bd = self.__model.discrete_linearize(self.__mean[t, :], u0)
-                K, S, E = self.dlqr(Ad, Bd, self.__Q, self.__R)
-            else:
-                K = np.zeros((Nu, Ny))
-                
             """ Initial values """
             con_par = con_par_func(self.__mean[t, :])
             param  = ca.vertcat(self.__mean[t, :], self.__x_sp,
@@ -417,7 +419,7 @@ class MPC:
             """ Simulate the next step """
             try:
                 self.__mean[t + 1] = self.__model.sim(self.__mean[t],
-                                       self.__u[t].reshape((1, Nu)), noise=False)
+                                       self.__u[t].reshape((1, Nu)), noise=noise)
             except RuntimeError:
                 print('----------------------------------------')
                 print('** System unstable, simulator crashed **')
@@ -531,32 +533,6 @@ class MPC:
         return con
 
 
-    def lqr(self, A, B, Q, R):
-        """Solve the continuous time lqr controller
-            dx/dt = A x + B u
-            cost = integral x.T*Q*x + u.T*R*u
-        """
-
-        S = np.array(scipy.linalg.solve_continuous_are(A, B, Q, R))
-        K = np.array(scipy.linalg.inv(R) @ (B.T @ S))
-        eigVals, eigVecs = scipy.linalg.eig(A - B @ K)
-
-        return K, S, eigVals
-
-
-    def dlqr(self, A, B, Q, R):
-        """Solve the discrete time lqr controller
-            x[k+1] = A x[k] + B u[k]
-            cost = sum x[k].T*Q*x[k] + u[k].T*R*u[k]
-        """
-
-        S = np.array(scipy.linalg.solve_discrete_are(A, B, Q, R))
-        K = np.array(scipy.linalg.inv(B.T @ S @ B + R) @ (B.T @ S @ A))
-        eigVals, eigVecs = scipy.linalg.eig(A - B @ K)
-
-        return K, S, eigVals
-
-
     def __debug(self, t):
         print('_______________  Debug  ________________')
         print('* Mean_%d:' %t)
@@ -622,3 +598,26 @@ class MPC:
             fig_x.canvas.set_window_title('MPC - H: %d' % self.__Nt)
         plt.show()
         return fig_x, fig_u
+
+
+def lqr(A, B, Q, R):
+    """Solve the infinite-horizon, discrete-time LQR controller
+        x[k+1] = A x[k] + B u[k]
+        u[k] = -K*x[k]
+        cost = sum x[k].T*Q*x[k] + u[k].T*R*u[k]
+    
+    # Arguments:
+        A, B: Linear system matrices
+        Q, R: State and input penalty matrices, both positive definite
+    
+    # Returns:
+        K: LQR gain matrix
+        S: Solution to the Riccati equation
+        E: Eigenvalues of the closed loop system
+    """
+
+    S = np.array(scipy.linalg.solve_discrete_are(A, B, Q, R))
+    K = np.array(scipy.linalg.inv(B.T @ S @ B + R) @ (B.T @ S @ A))
+    eigenvalues, eigenvec = scipy.linalg.eig(A - B @ K)
+
+    return K, S, eigenvalues

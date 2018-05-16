@@ -7,5 +7,5 @@ from . import gp_functions
 from . import optimize
 
 from .gp_class import GP
-from .mpc_class import MPC
+from .mpc_class import MPC, lqr
 from .model_class import Model

@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
 from .gp_functions import gp_exact_moment, gp_taylor_approx, gp, gp_test
 from .optimize import train_gp, validate
-
+from .mpc_class import lqr
 
 class GP:
     def __init__(self, X, Y, mean_func='zero', gp_method='TA',
@@ -91,19 +91,22 @@ class GP:
         else:
             raise NameError('No GP method called: ' + gp_method)
 
+        self.__discrete_jac_x = ca.Function('jac_x', [x, u, covar_s],
+                                      [ca.jacobian(self.predict(x,u, covar_s)[0], x)])
+        self.__discrete_jac_u = ca.Function('jac_x', [x, u, covar_s],
+                                      [ca.jacobian(self.predict(x,u,covar_s)[0], u)])
 
 
-
-    def discrete_linearize(self, x0, u0):
-        """ Linearize the discrete system around operating point
+    def discrete_linearize(self, x0, u0, cov0):
+        """ Linearize the GP around the operating point
             x[k+1] = Ax[k] + Bu[k]
         # Arguments:
             x0: State vector
             u0: Input vector
             cov0: Covariance
         """
-        Ad = np.array(self.__discrete_jac_x(x0, u0))
-        Bd = np.array(self.__discrete_jac_u(x0, u0))
+        Ad = np.array(self.__discrete_jac_x(x0, u0, cov0))
+        Bd = np.array(self.__discrete_jac_u(x0, u0, cov0))
         return Ad, Bd
 
     def noise_variance(self):
@@ -121,7 +124,8 @@ class GP:
             M: Reduce the model size from N to M.
         """
 
-    def predict_compare(self, x0, u, model, num_cols=2, xnames=None, title=None,):
+    def predict_compare(self, x0, u, model, num_cols=2, xnames=None, 
+                        title=None, feedback=False):
         """ Predict and compare all GP methods
         """
         # Predict future
@@ -136,14 +140,24 @@ class GP:
         mean = np.zeros((len(methods), Nt + 1 , Ny))
         var = np.zeros((len(methods), Nt + 1, Ny))
         covar = np.eye(Nx) * 1e-5 # Initial covar input matrix
+        Q = np.eye(Ny)
+        R= np.diag(Nx - Ny)
+
 
         for i in range(len(methods)):
             self.set_method(methods[i])
             mean_t = x0
             covar[:Ny, :Ny] = ca.diag(initVar)
             mean[i, 0, :] = x0
+            if feedback:
+                A, B = self.discrete_linearize(x0, u[0], covar)
+                K, S, E = lqr(A, B, Q, R)
             for t in range(1, Nt + 1):
-                mean_t, covar_x = self.predict(mean_t, u[t-1, :], covar)
+                if feedback:
+                    u_t = -K @ mean_t
+                else:
+                    u_t = u[t-1, :]
+                mean_t, covar_x = self.predict(mean_t, u_t, covar)
                 mean[i, t, :] = np.array(mean_t).reshape((Ny,))
                 var[i, t, :] = np.diag(covar_x)
                 covar[:Ny, :Ny] = covar_x
