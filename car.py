@@ -107,14 +107,14 @@ def inequality_constraints(x, covar, u, eps):
     con_ineq_lb.append(-road_bound)
 
     """ Obstacle avoidance """
-    Xcg_s = ca.SX.sym('Xcg')
-    Ycg_s = ca.SX.sym('Ycg')
-    ellipse = ca.Function('ellipse', [Xcg_s, Ycg_s],
-                         [ ((Xcg_s - obs_pos[0]) / obs_length)**2
-                          + ((Ycg_s - obs_pos[1]) / obs_width)**2] )
-    con_ineq.append(eps - ellipse(x[4], x[5]) + 1)
-    con_ineq_ub.append(0)
-    con_ineq_lb.append(-np.inf)
+    # Xcg_s = ca.SX.sym('Xcg')
+    # Ycg_s = ca.SX.sym('Ycg')
+    # ellipse = ca.Function('ellipse', [Xcg_s, Ycg_s],
+    #                      [ ((Xcg_s - obs_pos[0]) / obs_length)**2
+    #                       + ((Ycg_s - obs_pos[1]) / obs_width)**2] )
+    # con_ineq.append(eps - ellipse(x[4], x[5]) + 1)
+    # con_ineq_ub.append(0)
+    # con_ineq_lb.append(-np.inf)
 
     cons = dict(con_ineq=con_ineq,
                 con_ineq_lb=con_ineq_lb,
@@ -149,18 +149,15 @@ model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R)
 X, Y           = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 X_test, Y_test = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 
-
-
-
-
 ## Create GP model
 gp = GP(X, Y, gp_method='TA')
 #gp.validate(X_test, Y_test)
 
+# Test data
 x0 = np.array([13.89, 0.0, 0.0, 0.0, 1.0 , 0.0])
 u0 = [0, 0]
 cov0 = np.eye(Nx+Nu)
-u_test = np.zeros((30, 2))
+u_test = np.zeros((100, 2))
 
 #A, B = gp.discrete_linearize(x0, u0)
 #gp.predict_compare(x0, u_test, model)
@@ -193,7 +190,7 @@ lam = 10
 #R = np.eye(2)
 
 
-#
+
 mpc = MPC(horizon=20*dt, gp=gp, model=model,
           gp_method='TA',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
@@ -203,7 +200,7 @@ mpc = MPC(horizon=20*dt, gp=gp, model=model,
           )
 
 
-x, u = mpc.solve(x0, sim_time=10*dt, x_sp=x_sp, debug=True)
+x, u = mpc.solve(x0, sim_time=50*dt, x_sp=x_sp, debug=True)
 mpc.plot()
 plot_car(x[:, 4], x[:, 5])
 u1 = u[:10,:]
