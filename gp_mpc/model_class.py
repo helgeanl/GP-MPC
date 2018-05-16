@@ -52,17 +52,17 @@ class Model:
         """ Create integrator """
         # Integrator options
         options = {
-            "abstol" : 1e-8,
-            "reltol" : 1e-8,
+            "abstol" : 1e-6,
+            "reltol" : 1e-6,
             "tf" : dt,
         }
         if opt is not None:
             options.update(opt)
 
-        x = ca.SX.sym('x', Nx)
-        u = ca.SX.sym('u', Nu)
-        z = ca.SX.sym('z', Nz)
-        p = ca.SX.sym('p', Np)
+        x = ca.MX.sym('x', Nx)
+        u = ca.MX.sym('u', Nu)
+        z = ca.MX.sym('z', Nz)
+        p = ca.MX.sym('p', Np)
         par = ca.vertcat(u, p)
 
         dae = {'x': x, 'ode': ode(x,u,z,p), 'p':par}
@@ -72,8 +72,8 @@ class Model:
             dae.update({'z':z, 'alg': alg(x, z, u)})
 
 
-        self.__I = ca.integrator('I', 'idas', dae, options)
-#        self.__I = ca.integrator('I', 'cvodes', dae, options)
+        self.Integrator = ca.integrator('Integrator', 'idas', dae, options)
+
 
         #TODO: Fix discrete DAE model
         if alg is None:
@@ -86,20 +86,30 @@ class Model:
             xrk4 = x + dt/6*(k1 + 2*k2 + 2*k3 + k4)
             self.rk4 = ca.Function("ode_rk4", [x, u, p], [xrk4])
 
-
+        # Jacobian of continuous system
         self.__jac_x = ca.Function('jac_x', [x, u, p],
                                    [ca.jacobian(ode_casadi(x,u,p), x)])
         self.__jac_u = ca.Function('jac_x', [x, u, p],
                                    [ca.jacobian(ode_casadi(x,u,p), u)])
 
+        # Jacobian of discrete RK4 system
+        self.__discrete_rk4_jac_x = ca.Function('jac_x', [x, u, p],
+                                    [ca.jacobian(self.rk4(x,u,p), x)])
+        self.__discrete_rk4_jac_u = ca.Function('jac_x', [x, u, p],
+                                    [ca.jacobian(self.rk4(x,u,p), u)])
+
+        # Jacobian of exact discretization
         self.__discrete_jac_x = ca.Function('jac_x', [x, u, p],
-                                   [ca.jacobian(self.rk4(x,u,p), x)])
-        self.__discrete_jac_u = ca.Function('jac_x', [x, u, p],
-                                   [ca.jacobian(self.rk4(x,u,p), u)])
+                                   [ca.jacobian(self.Integrator(x0=x, 
+                                             p=ca.vertcat(u,p))['xf'], x)])
+
+        self.__discrete_jac_u = ca.Function('jac_u', [x, u, p], 
+                                    [ca.jacobian(self.Integrator(x0=x, 
+                                              p=ca.vertcat(u,p))['xf'], u)])
 
 
     def linearize(self, x0, u0, p0=[]):
-        """ Linearize the system around operating point
+        """ Linearize the continuous system around the operating point
             dx/dt = Ax + Bu
         # Arguments:
             x0: State vector
@@ -110,8 +120,9 @@ class Model:
         B = np.array(self.__jac_u(x0, u0, p0))
         return A, B
 
+
     def discrete_linearize(self, x0, u0, p0=[]):
-        """ Linearize the discrete system around operating point
+        """ Linearize the exact discrete system around the operating point
             x[k+1] = Ax[k] + Bu[k]
         # Arguments:
             x0: State vector
@@ -120,6 +131,19 @@ class Model:
         """
         Ad = np.array(self.__discrete_jac_x(x0, u0, p0))
         Bd = np.array(self.__discrete_jac_u(x0, u0, p0))
+        return Ad, Bd
+
+
+    def discrete_rk4_linearize(self, x0, u0, p0=[]):
+        """ Linearize the discrete rk4 system around the operating point
+            x[k+1] = Ax[k] + Bu[k]
+        # Arguments:
+            x0: State vector
+            u0: Input vector
+            p0: Parameter vector (optional)
+        """
+        Ad = np.array(self.__discrete_rk4_jac_x(x0, u0, p0))
+        Bd = np.array(self.__discrete_rk4_jac_u(x0, u0, p0))
         return Ad, Bd
 
 
@@ -153,10 +177,16 @@ class Model:
         par=ca.vertcat(u, p)
         if self.__Nz is not 0:
             z0 = self.__alg0(x0, u)
-            out = self.__I(x0=x0, p=u, z0=z0)
+            out = self.Integrator(x0=x0, p=u, z0=z0)
         else:
-            out = self.__I(x0=x0, p=par)
+            out = self.Integrator(x0=x0, p=par)
         return np.array(out["xf"]).flatten()
+
+    
+    def set_method(self, method='exact'):
+        """ Select wich discrete time method to use """
+
+
 
 
     def sim(self, x0, u, p=None, noise=False):
@@ -187,7 +217,7 @@ class Model:
             else:
                 p_t = []
             try:
-                x = self.integrate(x, u_t, p_t)
+                x = self.integrate(x, u_t, p_t).flatten()
             except RuntimeError:
                 print('----------------------------------------')
                 print('** System unstable, simulator crashed **')
@@ -313,7 +343,7 @@ class Model:
         sim_time = Nt * dt
 
         # Exact model with no noise
-        y_exact = self.sim(x0,u, noise=False)
+        y_exact = self.sim(x0, u, noise=False)
         y_exact = np.vstack([x0, y_exact])
 
         # RK4
@@ -322,12 +352,19 @@ class Model:
         for t in range(Nt):
             y_rk4[t + 1]= np.array(self.rk4(y_rk4[t], u[t-1, :], [])).reshape((Nx,))
 
-        # Discrete Linearized Model
+        #  Linearized Model of Exact discretization
         Ad, Bd = self.discrete_linearize(x0, u[0])
         y_lin = np.zeros((Nt + 1, Nx))
         y_lin[0] = x0
         for t in range(Nt):
             y_lin[t+1] = Ad @ y_lin[t] + Bd @ u[t]
+            
+        #  Linearized Model of RK4 discretization
+        Ad, Bd = self.discrete_rk4_linearize(x0, u[0])
+        y_rk4_lin = np.zeros((Nt + 1, Nx))
+        y_rk4_lin[0] = x0
+        for t in range(Nt):
+            y_rk4_lin[t+1] = Ad @ y_rk4_lin[t] + Bd @ u[t]
 
         t = np.linspace(0.0, sim_time, Nt + 1)
 
@@ -341,9 +378,10 @@ class Model:
         fig = plt.figure()
         for i in range(Nx):
             ax = fig.add_subplot(num_rows, num_cols, i + 1)
-            ax.plot(t, y_exact[:, i], 'b-', label='Excact')
+            ax.plot(t, y_exact[:, i], 'b-', label='Exact')
             ax.plot(t, y_rk4[:, i], 'r-', label='RK4')
-            ax.plot(t, y_lin[:, i], 'g-', label='Linearized')
+            ax.plot(t, y_lin[:, i], 'g--', label='Linearized')
+            ax.plot(t, y_lin[:, i], 'y--', label='Linearized RK4')
             ax.set_ylabel(xnames[i])
             ax.legend(prop=fontP, loc='best')
             ax.set_xlabel('Time')

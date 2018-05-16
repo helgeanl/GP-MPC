@@ -19,18 +19,21 @@ import casadi as ca
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 from gp_mpc import Model, GP, MPC
-
+import scipy.linalg
 
 
 def plot_car(x ,y):
     """ Plot the progression of the car in the x-y plane"""
+
     plt.figure()
     ax = plt.subplot(111)
     ax.axhline(y=road_bound, color='r', linestyle='-')
     ax.axhline(y=0, color='g', linestyle='--')
     ax.axhline(y=-road_bound, color='r', linestyle='-')
-    ell = Ellipse(xy=obs_pos, width=obs_length*2, height=obs_width*2)
-    ax.add_artist(ell)
+    for i in range(np.size(obs_pos,0)):
+        ell = Ellipse(xy=obs_pos[i], width=obs_length*2, height=obs_width*2)
+        ax.add_artist(ell)
+
     ax.plot(x, y, 'b-', linewidth=1.0)
     ax.set_ylabel('y [m]')
     ax.set_xlabel('x [m]')
@@ -67,7 +70,18 @@ def ode(x, u, z, p):
     return  ca.vertcat(*dxdt)
 
 
-def inequality_constraints(x, covar, u, eps):
+def constraint_parameters(x):
+#    obs_pos = np.array([[30, .3],
+#               [60, -0.5]])
+    car_pos = x[4:]
+    dist = np.sqrt((car_pos[0] - obs_pos[:,0])**2 + (car_pos[1] - obs_pos[:, 1])**2 )
+    
+#    no_obs = car_pos * 1000
+
+    return obs_pos[np.argmin(dist)]
+
+
+def inequality_constraints(x, covar, u, eps, par):
     con_ineq = []
     con_ineq_lb = []
     con_ineq_ub = []
@@ -107,14 +121,15 @@ def inequality_constraints(x, covar, u, eps):
     con_ineq_lb.append(-road_bound)
 
     """ Obstacle avoidance """
-    # Xcg_s = ca.SX.sym('Xcg')
-    # Ycg_s = ca.SX.sym('Ycg')
-    # ellipse = ca.Function('ellipse', [Xcg_s, Ycg_s],
-    #                      [ ((Xcg_s - obs_pos[0]) / obs_length)**2
-    #                       + ((Ycg_s - obs_pos[1]) / obs_width)**2] )
-    # con_ineq.append(eps - ellipse(x[4], x[5]) + 1)
-    # con_ineq_ub.append(0)
-    # con_ineq_lb.append(-np.inf)
+    Xcg_s = ca.SX.sym('Xcg')
+    Ycg_s = ca.SX.sym('Ycg')
+    pos_s = ca.SX.sym('pos', 2)
+    ellipse = ca.Function('ellipse', [Xcg_s, Ycg_s, pos_s],
+                          [ ((Xcg_s - pos_s[0]) / obs_length)**2
+                           + ((Ycg_s - pos_s[1]) / obs_width)**2] )
+    con_ineq.append(eps - ellipse(x[4], x[5], par) + 1)
+    con_ineq_ub.append(0)
+    con_ineq_lb.append(-np.inf)
 
     cons = dict(con_ineq=con_ineq,
                 con_ineq_lb=con_ineq_lb,
@@ -126,9 +141,9 @@ def inequality_constraints(x, covar, u, eps):
 
 solver_opts = {}
 solver_opts['ipopt.linear_solver'] = 'ma27'
-solver_opts['ipopt.max_cpu_time'] = 10
+solver_opts['ipopt.max_cpu_time'] = 20
 #solver_opts['ipopt.max_iter'] = 100
-solver_opts['expand']= False
+solver_opts['expand']= True
 
 meanFunc = 'zero'
 dt = 0.05
@@ -159,7 +174,10 @@ u0 = [0, 0]
 cov0 = np.eye(Nx+Nu)
 u_test = np.zeros((100, 2))
 
-#A, B = gp.discrete_linearize(x0, u0)
+#A, B = model.discrete_linearize(x0, u0)
+#eig = scipy.linalg.eig(A)
+
+
 #gp.predict_compare(x0, u_test, model)
 
 # Limits in the MPC problem
@@ -173,7 +191,9 @@ x_sp = np.array([5.8, 0., 0., 0., 20., 0. ])
 slip_min = -4.0 * np.pi / 180
 slip_max = 4.0 * np.pi / 180
 road_bound = 2.0
-obs_pos = [40., 0.3]
+obs_pos = np.array([[30, .3],
+               [80, -0.5],
+               [130, 0.]])
 obs_length = 15.
 obs_width = 1.
 
@@ -189,22 +209,23 @@ lam = 10
 #Q = np.eye(6)
 #R = np.eye(2)
 
-
-
+#
+#
 mpc = MPC(horizon=20*dt, gp=gp, model=model,
-          gp_method='TA',
+          discrete_method='rk4', gp_method='TA',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
           terminal_constraint=None, costFunc='quad', feedback=False,
-          solver_opts=solver_opts, use_rk4=True,
-          inequality_constraints=inequality_constraints
+          solver_opts=solver_opts, 
+          inequality_constraints=inequality_constraints, num_con_par=2
           )
 
 
-x, u = mpc.solve(x0, sim_time=50*dt, x_sp=x_sp, debug=True)
-mpc.plot()
+x, u = mpc.solve(x0, sim_time=300*dt, x_sp=x_sp, debug=False, 
+                 con_par_func=constraint_parameters)
+#mpc.plot()
 plot_car(x[:, 4], x[:, 5])
-u1 = u[:10,:]
-model.predict_compare(x0, u1)
+u1 = u[:20,:]
+#model.predict_compare(x[0], u1)
 ## Use previous data to train GP
 #X = x[:-1,:]
 #Y = x[1:,:]

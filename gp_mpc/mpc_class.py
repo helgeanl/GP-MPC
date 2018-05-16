@@ -23,7 +23,7 @@ class MPC:
                  Q=None, P=None, R=None, S=None, lam=None,
                  ulb=None, uub=None, xlb=None, xub=None, terminal_constraint=None,
                  feedback=True, gp_method='TA', costFunc='quad', solver_opts=None,
-                 use_rk4=False, inequality_constraints=None,
+                 discrete_method='gp', inequality_constraints=None, num_con_par=0,
                  parameters=None):
 
         """ Initialize and build the MPC solver
@@ -59,7 +59,8 @@ class MPC:
             solver_opts: Additional options to pass to the NLP solver
                     e.g.: solver_opts['print_time'] = False
                           solver_opts['ipopt.tol'] = 1e-8
-            use_rk4: If True, use RK4 of real model instead of GP
+            discrete_method: 'gp', 'rk4', or 'exact'
+            num_con_par: Number of parameters to pass to the inequality function
             inequality_constraints: Additional inequality constraints
                     Use a function with inputs (x, covar, u, eps) and
                     that returns a dictionary with inequality constraints and limits.
@@ -81,6 +82,7 @@ class MPC:
         self.__Ny = Ny
         self.__Nx = Nx
         self.__Nu = Nu
+        self.__num_con_par = num_con_par
         self.__model = model
         self.__feedback = feedback
 
@@ -114,7 +116,9 @@ class MPC:
         u_0_s          = ca.MX.sym('u_0', Nu)
         covariance_0_s = ca.MX.sym('covariance_0', Ny * Ny)
         K_s            = ca.MX.sym('K', Nu * Ny)
-        param_s        = ca.vertcat(mean_0_s, mean_ref_s, covariance_0_s, u_0_s, K_s)
+        con_par        = ca.MX.sym('con_par', num_con_par)
+        param_s        = ca.vertcat(mean_0_s, mean_ref_s, covariance_0_s, 
+                                    u_0_s, K_s, con_par)
 
         # Create GP and cos function symbols
         mean_s = ca.MX.sym('mean', Ny)
@@ -125,7 +129,11 @@ class MPC:
 
 
         """ Select wich GP function to use """
-        gp.set_method(gp_method)
+        if discrete_method is 'gp':
+            gp.set_method(gp_method)
+        
+        if solver_opts['expand'] is not False and discrete_method is 'exact':
+            raise NameError("Can't use exact discrete system with expanded graph")
 
         # Initialize state variance with the GP noise variance
         self.__variance_0 = gp.noise_variance()
@@ -206,8 +214,11 @@ class MPC:
             covar_t[:Ny, :Ny] = covar_x_t
 
             # Choose between GP and RK4 for next step
-            if use_rk4:
+            if discrete_method is 'rk4':
                 mean_next = model.rk4(var["mean",t], u_t,[])
+                covar_x_next = ca.MX(Ny, Ny)
+            elif discrete_method is 'exact':
+                mean_next = model.Integrator(x0=var["mean",t], p=u_t)['xf']
                 covar_x_next = ca.MX(Ny, Ny)
             else:
                 mean_next, covar_x_next = gp.predict(var['mean',t], u_t, covar_t)
@@ -240,7 +251,7 @@ class MPC:
             if inequality_constraints is not None:
                 cons = inequality_constraints(var['mean', t],
                                               var['covariance', t],
-                                              u_t, var['eps', t])
+                                              u_t, var['eps', t], con_par)
                 con_ineq.extend(cons['con_ineq'])
                 con_ineq_lb.extend(cons['con_ineq_lb'])
                 con_ineq_ub.extend(cons['con_ineq_ub'])
@@ -285,6 +296,7 @@ class MPC:
         if solver_opts is not None:
             options.update(solver_opts)
         self.__solver = ca.nlpsol('mpc_solver', 'ipopt', nlp, options)
+        
 
 
         # First prediction used in the NLP, used in plot later
@@ -301,7 +313,7 @@ class MPC:
         print('----------------------------------------')
 
 
-    def solve(self, x0, sim_time, x_sp=None, u0=None, debug=False):
+    def solve(self, x0, sim_time, x_sp=None, u0=None, debug=False, con_par_func=None):
         """ Solve the optimal control problem
 
         # Arguments:
@@ -311,6 +323,8 @@ class MPC:
         # Optional Arguments:
             x_sp: State set point, default is zero
             u0: Initial input
+            con_par_func: Function to calculate the parameters to pass to the 
+                          inequality function, inputs the current state.
 
         # Returns:
             mean: Simulated output using the optimal control inputs
@@ -359,10 +373,12 @@ class MPC:
                 K, S, E = self.dlqr(Ad, Bd, self.__Q, self.__R)
             else:
                 K = np.zeros((Nu, Ny))
-
+                
             """ Initial values """
+            con_par = con_par_func(self.__mean[t, :])
             param  = ca.vertcat(self.__mean[t, :], self.__x_sp,
-                                self.__covariance[t, :].flatten(), u0, K.flatten())
+                                self.__covariance[t, :].flatten(), u0, K.flatten(),
+                                con_par)
             args = dict(x0=self.__var_init,
                         lbx=self.__varlb,
                         ubx=self.__varub,
@@ -401,7 +417,7 @@ class MPC:
             """ Simulate the next step """
             try:
                 self.__mean[t + 1] = self.__model.sim(self.__mean[t],
-                                       self.__u[t].reshape((1, Nu)), noise=True)
+                                       self.__u[t].reshape((1, Nu)), noise=False)
             except RuntimeError:
                 print('----------------------------------------')
                 print('** System unstable, simulator crashed **')
