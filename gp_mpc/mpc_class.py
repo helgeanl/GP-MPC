@@ -85,6 +85,7 @@ class MPC:
         self.__num_con_par = num_con_par
         self.__model = model
         self.__feedback = feedback
+        
 
         """ Default penalty values """
         if P is None:
@@ -97,10 +98,12 @@ class MPC:
             S = np.eye(Nu) * 0.1
         if lam is None:
             lam = 1000
-
-        # Keep these so they can be used with LQR at each step
+            
         self.__Q = Q
+        self.__P = P
         self.__R = R
+        self.__S = S
+      
 
         #TODO: Clean this up
         percentile = 0.95
@@ -120,13 +123,7 @@ class MPC:
         param_s        = ca.vertcat(mean_0_s, mean_ref_s, covariance_0_s, 
                                     u_0_s, K_s, con_par)
 
-        # Create GP and cos function symbols
-        mean_s = ca.MX.sym('mean', Ny)
-        covar_x_s = ca.MX.sym('covar', Ny, Ny)
-        v_s = ca.MX.sym('v', Nu)
-        u_s = ca.MX.sym('u', Nu)
-        delta_u_s = ca.MX.sym('delta_u', Nu)
-
+        
 
         """ Select wich GP function to use """
         if discrete_method is 'gp':
@@ -138,28 +135,13 @@ class MPC:
         # Initialize state variance with the GP noise variance
         self.__variance_0 = gp.noise_variance()
 
-        #TODO: refactor this out
-        """ Define stage cost and terminal cost """
-        if costFunc is 'quad':
-            l_func = ca.Function('l', [mean_s, covar_x_s, u_s, delta_u_s, K_s],
-                               [self.__cost_l(mean_s, mean_ref_s, covar_x_s, u_s, delta_u_s,
-                                           ca.MX(Q), ca.MX(R), ca.MX(S), K_s.reshape((Nu, Ny)))])
-            lf_func = ca.Function('lf', [mean_s, covar_x_s],
-                                   [self.__cost_lf(mean_s, mean_ref_s,
-                                                   covar_x_s,  ca.MX(P))])
-        elif costFunc is 'sat':
-            l_func = ca.Function('l', [mean_s, covar_x_s, u_s, delta_u_s, K_s],
-                               [self.__cost_saturation_l(mean_s, mean_ref_s,
-                                    covar_x_s, u_s, delta_u_s, ca.MX(Q), ca.MX(R),
-                                    ca.MX(S), K_s.reshape((Nu, Ny)))])
-            lf_func = ca.Function('lf', [mean_s, covar_x_s],
-                                   [self.__cost_saturation_lf(mean_s,
-                                        mean_ref_s, covar_x_s,  ca.MX(P))])
-        else:
-             raise NameError('No cost function called: ' + costFunc)
-
+        # Define which cost function to use
+        self.__set_cost_function(costFunc, mean_ref_s)
+        
 
         """ Feedback function """
+        mean_s = ca.MX.sym('mean', Ny)
+        v_s = ca.MX.sym('v', Nu)
         if feedback:
             u_func = ca.Function('u', [mean_s, v_s, K_s],
                                  [v_s - ca.mtimes(K_s.reshape((Nu, Ny)), mean_s)])
@@ -191,8 +173,6 @@ class MPC:
             if xlb is not None:
                 self.__varlb['mean', t] = xlb
 
-
-
         # Build up constraints and objective
         obj = ca.MX(0)
         con_eq = []
@@ -204,14 +184,34 @@ class MPC:
         con_eq.append(var['mean', 0] - mean_0_s)
         con_eq.append(var['covariance', 0] - covariance_0_s)
         u_past = u_0_s
-        covar_t = ca.MX(Nx, Nx)
+        
+        """ Fill the input covariance matrix """
+        covar_x_s = ca.MX.sym('covar_x', Ny, Ny)
+        covar_x_sx = ca.SX.sym('cov_x', Ny, Ny)
+        K_sx = ca.SX.sym('K', Nu, Ny)
 
+        covar_u_func = ca.Function('cov_u', [covar_x_sx, K_sx], 
+                                   [K_sx @ covar_x_sx @ K_sx.T])
+        
+        cov_xu_func = ca.Function('cov_xu', [covar_x_sx, K_sx], 
+                                  [covar_x_sx @ K_sx.T])
+        
+        covar_s = ca.MX(Nx, Nx)
+        cov_xu = cov_xu_func(covar_x_s, K_s.reshape((Nu, Ny)))
+        covar_s[:Ny, :Ny] = covar_x_s
+        covar_s[Ny:, Ny:] = covar_u_func(covar_x_s, K_s.reshape((Nu, Ny)))
+        covar_s[Ny:, :Ny] = cov_xu.T
+        covar_s[:Ny, Ny:] = cov_xu
+        covar_func = ca.Function('covar', [covar_x_s], [covar_s])
+        
+        covar_t = ca.MX(Nx, Nx)
         for t in range(Nt):
             # Input to GP
             u_t = u_func(var['mean', t], var['v', t], K_s)
 
             covar_x_t = var['covariance', t].reshape((Ny, Ny))
-            covar_t[:Ny, :Ny] = covar_x_t
+#            covar_t[:Ny, :Ny] = covar_x_t
+            covar_t = covar_func(covar_x_t)
 
             # Choose between GP and RK4 for next step
             if discrete_method is 'rk4':
@@ -238,14 +238,26 @@ class MPC:
                 con_ineq_lb.append(xlb)
 
             # Input constraints
+            cov_u = covar_u_func(covar_x_t, K_s.reshape((Nu, Ny)))
             if uub is not None:
-                con_ineq.append(u_t)
+                con_ineq.append(u_t + quantile_u * ca.sqrt(ca.diag(cov_u) + 1e-6))
                 con_ineq_ub.extend(uub)
                 con_ineq_lb.append(np.full((Nu,), -ca.inf))
             if ulb is not None:
-                con_ineq.append(u_t)
+                con_ineq.append(u_t - quantile_u * ca.sqrt(ca.diag(cov_u) + 1e-6))
                 con_ineq_ub.append(np.full((Nu,), ca.inf))
                 con_ineq_lb.append(ulb)
+           
+    
+#            cov_u = ca.MX(Nu,Nu)
+#            if uub is not None:
+#                con_ineq.append(u_t)
+#                con_ineq_ub.extend(uub)
+#                con_ineq_lb.append(np.full((Nu,), -ca.inf))
+#            if ulb is not None:
+#                con_ineq.append(u_t )
+#                con_ineq_ub.append(np.full((Nu,), ca.inf))
+#                con_ineq_lb.append(ulb)
 
             # Add extra constraints
             if inequality_constraints is not None:
@@ -258,9 +270,9 @@ class MPC:
 
             # Objective function
             u_delta = u_t - u_past
-            obj += l_func(var['mean', t], covar_x_t, u_t, u_delta, K_s) + lam * var['eps', t]
+            obj += self.__l_func(var['mean', t], covar_x_t, u_t, cov_u, u_delta) + lam * var['eps', t]
             u_t = u_past
-        obj += lf_func(var['mean', Nt], var['covariance', Nt].reshape((Ny, Ny)))
+        obj += self.__lf_func(var['mean', Nt], var['covariance', Nt].reshape((Ny, Ny)))
 
         num_eq_con = ca.vertcat(*con_eq).size1()
         num_ineq_con = ca.vertcat(*con_ineq).size1()
@@ -282,7 +294,7 @@ class MPC:
         options = {
             'ipopt.print_level' : 0,
             'ipopt.mu_init' : 0.01,
-            'ipopt.tol' : 1e-8,
+            'ipopt.tol' : 1e-6,
             'ipopt.warm_start_init_point' : 'yes',
             'ipopt.warm_start_bound_push' : 1e-9,
             'ipopt.warm_start_bound_frac' : 1e-9,
@@ -349,9 +361,9 @@ class MPC:
         self.__Nsim = int(sim_time / dt)
 
         # Initialize variables
-        self.__mean          = np.zeros((self.__Nsim + 1, Ny))
-        self.__covariance    = np.zeros((self.__Nsim + 1, Ny, Ny))
-        self.__u             = np.zeros((self.__Nsim, Nu))
+        self.__mean          = np.full((self.__Nsim + 1, Ny), x0)
+        self.__covariance    = np.ones((self.__Nsim + 1, Ny, Ny)) * 1e-5
+        self.__u             = np.full((self.__Nsim, Nu), u0)
 
         self.__mean[0]       = x0
         self.__covariance[0] = np.diag(self.__variance_0)
@@ -360,7 +372,6 @@ class MPC:
         # Initial guess of the warm start variables
         #TODO: Add option to restart with previous state
         self.__var_init = self.__var(0)
-        self.__var_init['mean', 0] =  self.__mean[0]
         self.__var_init['covariance', 0] = self.__covariance[0].flatten()
         self.__lam_x0 = np.zeros(self.__num_var)
         self.__lam_g0 = 0
@@ -377,7 +388,17 @@ class MPC:
             solve_time = -time.time()
 
             """ Initial values """
-            con_par = con_par_func(self.__mean[t, :])
+            self.__var_init['mean', 0]  = self.__mean[t]
+            self.__varlb['mean', 0]     = self.__mean[t]
+            self.__varub['mean', 0]     = self.__mean[t]
+            if con_par_func is not None:
+                con_par = con_par_func(self.__mean[t, :])
+            else:
+                con_par = []
+                if self.__num_con_par > 0:
+                    raise TypeError(('Number of constraint parameters ({x}) is greater than zero, '
+                                    'but no parameter function is provided.'
+                                        ).format(x=self.__num_con_par))
             param  = ca.vertcat(self.__mean[t, :], self.__x_sp,
                                 self.__covariance[t, :].flatten(), u0, K.flatten(),
                                 con_par)
@@ -411,6 +432,7 @@ class MPC:
             v = optvar['v', 0, :]
 
             self.__u[t, :] = np.array(self.__u_func(self.__mean[t, :], v, K.flatten())).flatten()
+            #TODO: Fix this
             self.__covariance[t + 1, :] = np.array(optvar['covariance', -1, :].reshape((Ny, Ny)))
 
             if debug:
@@ -427,7 +449,38 @@ class MPC:
                 return self.__mean, self.__u
         return self.__mean, self.__u
 
+    
+    def __set_cost_function(self, costFunc, mean_ref_s):
+        """ Define stage cost and terminal cost 
+        """
+        # Create GP and cos function symbols
+        mean_s = ca.MX.sym('mean', self.__Ny)
+        covar_x_s = ca.MX.sym('covar_x', self.__Ny, self.__Ny)
+        covar_u_s = ca.MX.sym('covar_u', self.__Nu, self.__Nu)
+        u_s = ca.MX.sym('u', self.__Nu)
+        delta_u_s = ca.MX.sym('delta_u', self.__Nu)
+        Q = ca.MX(self.__Q)
+        P = ca.MX(self.__P)
+        R = ca.MX(self.__R)
+        S = ca.MX(self.__S)
 
+        if costFunc is 'quad':
+            self.__l_func = ca.Function('l', [mean_s, covar_x_s, u_s, covar_u_s, delta_u_s],
+                               [self.__cost_l(mean_s, mean_ref_s, covar_x_s, u_s,
+                                covar_u_s, delta_u_s, Q, R, S)])
+            self.__lf_func = ca.Function('lf', [mean_s, covar_x_s],
+                                   [self.__cost_lf(mean_s, mean_ref_s, covar_x_s, P)])
+        elif costFunc is 'sat':
+            self.__l_func = ca.Function('l', [mean_s, covar_x_s, u_s, covar_u_s, delta_u_s],
+                               [self.__cost_saturation_l(mean_s, mean_ref_s,
+                                    covar_x_s, u_s, covar_u_s, delta_u_s, Q, R, S)])
+            self.__lf_func = ca.Function('lf', [mean_s, covar_x_s],
+                                   [self.__cost_saturation_lf(mean_s,
+                                        mean_ref_s, covar_x_s,  P)])
+        else:
+             raise NameError('No cost function called: ' + costFunc)
+        
+    
     def __cost_lf(self, x, x_ref, covar_x, P, s=1):
         """ Terminal cost function: Expected Value of Quadratic Cost
         """
@@ -460,7 +513,7 @@ class MPC:
         return cost_x(x - x_ref, P, covar_x)
 
 
-    def __cost_saturation_l(self, x, x_ref, covar_x, u, delta_u, Q, R, S, K):
+    def __cost_saturation_l(self, x, x_ref, covar_x, u, covar_u, delta_u, Q, R, S):
         """ Stage Cost function: Expected Value of Saturating Cost
         """
         Nx = ca.MX.size1(Q)
@@ -469,14 +522,10 @@ class MPC:
         # Create symbols
         Q_s = ca.SX.sym('Q', Nx, Nx)
         R_s = ca.SX.sym('Q', Nu, Nu)
-        K_s = ca.SX.sym('K', ca.MX.size(K))
         x_s = ca.SX.sym('x', Nx)
         u_s = ca.SX.sym('x', Nu)
         covar_x_s = ca.SX.sym('covar_z', Nx, Nx)
         covar_u_s = ca.SX.sym('covar_u', ca.MX.size(R))
-
-        covar_u  = ca.Function('covar_u', [covar_x_s, K_s],
-                               [K_s @ covar_x_s @ K_s.T])
 
         Z_x = ca.SX.eye(Nx) + 2 * covar_x_s @ Q_s
         Z_u = ca.SX.eye(Nu) + 2 * covar_u_s @ R_s
@@ -488,15 +537,14 @@ class MPC:
                            [1 - ca.exp(-(u_s.T @ ca.solve(Z_u.T, R_s.T).T @ u_s))
                                    / ca.sqrt(ca.det(Z_u))])
 
-        return cost_x(x - x_ref, Q, covar_x)  + cost_u(u, R, covar_u(covar_x, K))
+        return cost_x(x - x_ref, Q, covar_x)  + cost_u(u, R, covar_u)
 
 
-    def __cost_l(self, x, x_ref, covar_x, u, delta_u, Q, R, S, K, s=1):
+    def __cost_l(self, x, x_ref, covar_x, u, covar_u, delta_u, Q, R, S, s=1):
         """ Stage cost function: Expected Value of Quadratic Cost
         """
         Q_s = ca.SX.sym('Q', ca.MX.size(Q))
         R_s = ca.SX.sym('R', ca.MX.size(R))
-        K_s = ca.SX.sym('K', ca.MX.size(K))
         x_s = ca.SX.sym('x', ca.MX.size(x))
         u_s = ca.SX.sym('u', ca.MX.size(u))
         covar_x_s = ca.SX.sym('covar_x', ca.MX.size(covar_x))
@@ -506,18 +554,17 @@ class MPC:
                                [ca.mtimes(x_s.T, ca.mtimes(Q_s, x_s))])
         sqnorm_u = ca.Function('sqnorm_u', [u_s, R_s],
                                [ca.mtimes(u_s.T, ca.mtimes(R_s, u_s))])
-        covar_u  = ca.Function('covar_u', [covar_x_s, K_s],
-                               [ca.mtimes(K_s, ca.mtimes(covar_x_s, K_s.T))])
         trace_u  = ca.Function('trace_u', [R_s, covar_u_s],
                                [s * ca.trace(ca.mtimes(R_s, covar_u_s))])
         trace_x  = ca.Function('trace_x', [Q_s, covar_x_s],
                                [s * ca.trace(ca.mtimes(Q_s, covar_x_s))])
 
         return sqnorm_x(x - x_ref, Q) + sqnorm_u(u, R) + sqnorm_u(delta_u, S) \
-                + trace_x(Q, covar_x)  + trace_u(R, covar_u(covar_x, K))
+                + trace_x(Q, covar_x)  + trace_u(R, covar_u)
 
 
     def __constraint(self, mean, covar, H, quantile):
+        # NOT IN USE
         r = ca.SX.sym('r')
         mean_s = ca.SX.sym('mean', ca.MX.size(mean))
         covar_s = ca.SX.sym('r', ca.MX.size(covar))
@@ -539,6 +586,8 @@ class MPC:
         print(self.__mean[t])
         print('* u_%d:' % t)
         print(self.__u[t])
+        print('* covar_%d:' % t)
+        print(self.__covariance[t, :])
         print('----------------------------------------')
 
 
@@ -595,7 +644,7 @@ class MPC:
         if title is not None:
             fig_x.canvas.set_window_title(title)
         else:
-            fig_x.canvas.set_window_title('MPC - H: %d' % self.__Nt)
+            fig_x.canvas.set_window_title('MPC Horizon: %d, Feedback: %s' % (self.__Nt, self.__feedback))
         plt.show()
         return fig_x, fig_u
 
@@ -621,3 +670,19 @@ def lqr(A, B, Q, R):
     eigenvalues, eigenvec = scipy.linalg.eig(A - B @ K)
 
     return K, S, eigenvalues
+
+
+def plot_eig(A, discrete=True):
+    eigenvalues, eigenvec = scipy.linalg.eig(A)
+    fig,ax = plt.subplots()
+    ax.axhline(y=0, color='k', linestyle='--')
+    ax.axvline(x=0, color='k', linestyle='--')
+    ax.scatter(eigenvalues.real, eigenvalues.imag)
+    if discrete:
+        ax.add_artist(plt.Circle((0,0), 1, color='g', alpha=.1))
+    plt.ylim([min(-1, min(eigenvalues.imag)), max(1, max(eigenvalues.imag))])
+    plt.xlim([min(-1, min(eigenvalues.real)), max(1, max(eigenvalues.real))])
+    plt.gca().set_aspect('equal', adjustable='box')
+
+    fig.canvas.set_window_title('Eigenvalues of linearized system')
+    return eigenvalues
