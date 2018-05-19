@@ -158,7 +158,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     hyp_opt = np.zeros((Ny, num_hyp))
     lam_x_opt = np.zeros((Ny, num_hyp))
     invK = np.zeros((Ny, N, N))
-    invK_Y = np.zeros((Ny, N))
+    alpha = np.zeros((Ny, N))
 
     print('\n________________________________________')
     print('# Optimizing hyperparameters (N=%d)' % N )
@@ -183,8 +183,8 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
         elif meanFunc is not 'zero':
             lb[-1] = meanF / 5
             ub[-1] = meanF * 5
-            lb[-h_m:-1] = 0
-            ub[-h_m:-1] = 2
+            lb[-h_m:-1] = -np.inf
+            ub[-h_m:-1] = np.inf
 
         if hyper_init is None:
             hyp_init = pyDOE.lhs(num_hyp, samples=1).flatten()
@@ -238,14 +238,16 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
             L = np.linalg.cholesky(K)
         invL = np.linalg.solve(L, np.eye(N))
         invK[output, :, :] = np.linalg.solve(L.T, invL)
-        invK_Y[output] = np.dot(invK[output], Y[:, output])
+        m = get_mean_function(ca.MX(hyp_opt[output, :]), X, func=meanFunc)
+        mean = np.array(m(X)).reshape((N,))
+        alpha[output] = np.dot(invK[output], Y[:, output] - mean)
     print('----------------------------------------')
 
     opt = {}
     opt['hyper'] = hyp_opt
     opt['lam_x'] = lam_x_opt
     opt['invK'] = invK
-    opt['alpha'] = invK_Y
+    opt['alpha'] = alpha
     return opt
 
 

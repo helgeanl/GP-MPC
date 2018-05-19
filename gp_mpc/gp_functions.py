@@ -37,95 +37,130 @@ def get_mean_function(hyper, X, func='zero'):
     m = ca.SX(N, 1)
     hyp_s = ca.SX.sym('hyper', hyper.shape)
     if func == 'zero':
-        a = ca.SX(1,1)
-        meanF = ca.Function('mean', [X_s, hyp_s], [a])
+        meanF = ca.Function('zero_mean', [X_s, hyp_s], [m])
     elif func == 'const':
         a =  hyp_s[-1]
         for i in range(N):
             m[i] = a
-        meanF = ca.Function('mean', [X_s, hyp_s], [m])
+        meanF = ca.Function('const_mean', [X_s, hyp_s], [m])
     elif func == 'linear':
         a = hyp_s[-Nx-1:-1]
         b = hyp_s[-1]
         for i in range(N):
             m[i] = ca.mtimes(a, X_s[i, :].T) + b
-        meanF = ca.Function('mean', [X_s, hyp_s], [m])
+        meanF = ca.Function('linear_mean', [X_s, hyp_s], [m])
     elif func == 'polynomial':
         a = hyp_s[-2*Nx-1:-Nx-1]
         b = hyp_s[-Nx-1:-1]
         c = hyp_s[-1]
         for i in range(N):
             m[i] = ca.mtimes(a, X_s[i, :].T**2) + ca.mtimes(b, X_s[i, :].T) + c
-        meanF = ca.Function('mean', [X_s, hyp_s], [m])
+        meanF = ca.Function('poly_mean', [X_s, hyp_s], [m])
     else:
         raise NameError('No mean function called: ' + func)
 
     return ca.Function('mean', [Z_s], [meanF(Z_s, hyper)])
 
 
-def gp_test(invK, X, Y, hyper, x, u):
-    """ Gaussian Process
+def build_gp(invK, X, hyper, alpha, meanFunc='zero'):
+    """ Build Gaussian Process function
 
     # Arguments
         invK: Array with the inverse covariance matrices of size (Ny x N x N),
             with Ny number of outputs from the GP and N number of training points.
         X: Training data matrix with inputs of size (N x Nx), with Nx number of
             inputs to the GP.
-        Y: Training data matrix with outpyts of size (N x Ny).
+        alpha: Training data matrix with invK time outputs of size (Ny x N).
         hyper: Array with hyperparame|ters [ell_1 .. ell_Nx sf sn].
-        inputmean: Input to the GP of size (1 x Nx)
 
     # Returns
-        mean: The estimated mean.
-        var: The estimated variance
+        mean:     GP mean casadi function [mean(z)]
+        covar:    GP covariance casadi function [covar(z)]
+        mean_jac: Casadi jacobian of the GP mean function [jac(z)]
     """
 
-    z = ca.vertcat(x, u)
-
+ 
     Ny = len(invK)
-    N, Nx = ca.MX.size(X)
+    X = ca.SX(X)
+    N, Nx = ca.SX.size(X)
 
-    mean  = ca.MX.zeros(Ny, 1)
-    var  = ca.MX.zeros(Ny, 1)
+    mean  = ca.SX.zeros(Ny, 1)
+    var   = ca.SX.zeros(Ny, 1)
 
     # Casadi symbols
-    x_s     = ca.SX.sym('x', Nx)
-    z_s     = ca.SX.sym('z', Nx)
-    ell_s   = ca.SX.sym('ell', Nx)
-    sf2_s   = ca.SX.sym('sf2')
-
-    invK_s  = ca.SX.sym('invK', N, N)
-    Y_s     = ca.SX.sym('Y', N)
-    ks_s    = ca.SX.sym('ks', N)
-    kss_s   = ca.SX.sym('kss')
+    x_s        = ca.SX.sym('x', Nx)
+    z_s        = ca.SX.sym('z', Nx)
+    m_s        = ca.SX.sym('m')
+    ell_s      = ca.SX.sym('ell', Nx)
+    sf2_s      = ca.SX.sym('sf2')
+    invK_s     = ca.SX.sym('invK', N, N)
+    X_s        = ca.SX.sym('X', N, Nx)
+    ks_s       = ca.SX.sym('ks', N)
+    kss_s      = ca.SX.sym('kss')
     ksT_invK_s = ca.SX.sym('ksT_invK', 1, N)
-
+    alpha_s    = ca.SX.sym('alpha', N)
 
     covSE = ca.Function('covSE', [x_s, z_s, ell_s, sf2_s],
                           [covSEard(x_s, z_s, ell_s, sf2_s)])
+    
+    ks = ca.SX.zeros(N, 1)
+    for i in range(N):
+        ks[i] = covSE(X_s[i, :], z_s, ell_s, sf2_s)
+    ks_func = ca.Function('ks', [X_s, z_s, ell_s, sf2_s], [ks])
+
+    mean_i_func = ca.Function('mean', [ks_s, alpha_s, m_s], 
+                            [ca.mtimes(ks_s.T, alpha_s) + m_s])
 
     ksT_invK_func = ca.Function('ksT_invK', [ks_s, invK_s],
-                           [ca.mtimes(ks_s.T, invK_s)])
+                           [ca.mtimes(ks_s.T, invK_s)])    
 
-    mean_func = ca.Function('mean', [ksT_invK_s, Y_s],
-                           [ca.mtimes(ksT_invK_s, Y_s )])
-
+    var_i_func  = ca.Function('var', [ks_s, kss_s, ksT_invK_s],
+                            [kss_s - ca.mtimes(ksT_invK_s, ks_s)])
 
     for output in range(Ny):
-        ell = ca.MX(hyper[output, 0:Nx])
-        sf2 = ca.MX(hyper[output, Nx]**2)
+        ell      = ca.SX(hyper[output, 0:Nx])
+        sf2      = ca.SX(hyper[output, Nx]**2)
+        invK_a   = ca.SX(invK[output])
+        alpha_a  = ca.SX(alpha[output])
+        ks       = ks_func(X_s, z_s, ell, sf2)
+        ksT_invK = ksT_invK_func(ks, invK_a)
+        m = get_mean_function(ca.MX(hyper[output, :]), z_s.T, func=meanFunc)
 
-        kss = covSE(z, z, ell, sf2)
-        ks = ca.MX.zeros(N, 1)
-        for i in range(N):
-            ks[i] = covSE(X[i, :], z, ell, sf2)
+        mean[output] = mean_i_func(ks, alpha_a, m(z_s))
+        var[output]  = var_i_func(ks, sf2, ksT_invK) 
 
-        ksT_invK = ksT_invK_func(ks, ca.MX(invK[output]))
+    mean_temp  = ca.Function('mean_temp', [z_s, X_s], [mean])
+    var_temp   = ca.Function('var_temp',  [z_s, X_s], [var])
+    
+    mean_func  = ca.Function('mean', [z_s], [mean_temp(z_s, X)])
+    covar_func = ca.Function('var',  [z_s], [ca.diag(var_temp(z_s, X))])
+    
+    mean_jac_z = ca.Function('mean_jac_z', [z_s],
+                                      [ca.jacobian(mean_func(z_s), z_s)])
 
-        mean[output] = mean_func(ksT_invK, Y[:, output])
+    return mean_func, covar_func, mean_jac_z
 
 
-    return mean
+def build_TA_cov(mean, covar, jac, Nx, Ny):
+    """ Build 1st order Taylor approximation of covariance function
+    
+    # Arguments:
+        mean: GP mean casadi function [mean(z)]
+        covar: GP covariance casadi function [covar(z)]
+        jac: Casadi jacobian of the GP mean function [jac(z)]
+        Nx: Number of inputs to the GP
+        Ny: Number of ouputs from the GP
+    
+    # Return:
+        cov: Casadi function with the approximated covariance 
+             function [cov(z, covar_x)].
+    """
+    cov_z  = ca.SX.sym('cov_z', Nx, Nx)
+    z_s    = ca.SX.sym('z', Nx)
+    jitter = ca.SX.ones(Ny, Ny)*1e-7 # Help against numerical noise
+    cov    = ca.Function('cov', [z_s, cov_z], 
+                      [covar(z_s) + jac(z_s) @ cov_z @ jac(z_s).T + jitter])
+    return cov
 
 
 def gp(invK, X, Y, hyper, inputmean,  alpha=None, meanFunc='zero', log=False):
@@ -290,6 +325,7 @@ def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputcovar,
                                          * dd_var + mean_mat))
 
     return [mean, covariance]
+
 
 
 def gp_exact_moment(invK, X, Y, hyper, inputmean, inputcov):

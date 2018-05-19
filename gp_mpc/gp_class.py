@@ -14,7 +14,7 @@ import numpy as np
 import casadi as ca
 import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
-from .gp_functions import gp_exact_moment, gp_taylor_approx, gp, gp_test
+from .gp_functions import gp_exact_moment, gp_taylor_approx, gp, build_gp, build_TA_cov
 from .optimize import train_gp, validate
 from .mpc_class import lqr
 
@@ -45,7 +45,22 @@ class GP:
         self.__hyper_noise_variance = self.__hyper[:, self.__Nx + 1]**2
         self.__hyper_mean           = self.__hyper[:, (self.__Nx + 1):]
 
+        # Build GP
+        self.__mean, self.__covar, self.__mean_jac = build_gp(self.__invK, self.__X, 
+                                                     self.__hyper, self.__alpha)
+        self.__TA_covar = build_TA_cov(self.__mean, self.__covar,
+                                       self.__mean_jac, self.__Nx, self.__Ny)
+        
         self.set_method(gp_method)
+        
+        
+    def gp_test(self, z):
+        return self.__mean(z), self.__covar(z)
+
+
+    def gp_TA_test(self, z, covar):
+        return self.__mean(z), self.__TA_covar(z, covar)
+
 
 
 
@@ -65,24 +80,22 @@ class GP:
         self.__gp_method = gp_method
 
         if gp_method is 'ME':
+#            self.predict = ca.Function('gp_mean', [x, u, covar_s],
+#                                gp(self.__invK, ca.MX(self.__X), ca.MX(self.__Y),
+#                                   ca.MX(self.__hyper),
+#                                   ca.vertcat(x, u).T, meanFunc=self.__mean_func))
             self.predict = ca.Function('gp_mean', [x, u, covar_s],
-                                gp(self.__invK, ca.MX(self.__X), ca.MX(self.__Y),
-                                   ca.MX(self.__hyper),
-                                   ca.vertcat(x, u).T, meanFunc=self.__mean_func))
-        elif gp_method is 'test':
-            self.predict = ca.Function('gp_test', [x, u],
-                                [gp_test(self.__invK, ca.MX(self.__X), ca.MX(self.__Y),
-                                   ca.MX(self.__hyper), x, u)])
-            self.__discrete_jac_x = ca.Function('jac_x', [x, u],
-                                      [ca.jacobian(self.predict(x,u), x)])
-            self.__discrete_jac_u = ca.Function('jac_x', [x, u],
-                                      [ca.jacobian(self.predict(x,u), u)])
+                                [self.__mean(ca.vertcat(x,u)),
+                                 self.__covar(ca.vertcat(x,u))])
         elif gp_method is 'TA':
-            self.predict = ca.Function('gp_taylor_approx', [x, u, covar_s],
-                                gp_taylor_approx(self.__invK, ca.MX(self.__X),
-                                        ca.MX(self.__Y), ca.MX(self.__hyper),
-                                        ca.vertcat(x, u).T, covar_s,
-                                        meanFunc=self.__mean_func, diag=True))
+#            self.predict = ca.Function('gp_taylor_approx', [x, u, covar_s],
+#                                gp_taylor_approx(self.__invK, ca.MX(self.__X),
+#                                        ca.MX(self.__Y), ca.MX(self.__hyper),
+#                                        ca.vertcat(x, u).T, covar_s,
+#                                        meanFunc=self.__mean_func, diag=True))
+            self.predict = ca.Function('gp_taylor', [x, u, covar_s],
+                                [self.__mean(ca.vertcat(x,u)),
+                                 self.__TA_covar(ca.vertcat(x,u), covar_s)])
         elif gp_method is 'EM':
             self.predict = ca.Function('gp_exact_moment', [x, u, covar_s],
                                 gp_exact_moment(self.__invK, ca.MX(self.__X),
@@ -108,6 +121,7 @@ class GP:
         Ad = np.array(self.__discrete_jac_x(x0, u0, cov0))
         Bd = np.array(self.__discrete_jac_u(x0, u0, cov0))
         return Ad, Bd
+
 
     def noise_variance(self):
         """ Get the noise variance
@@ -141,7 +155,7 @@ class GP:
         var = np.zeros((len(methods), Nt + 1, Ny))
         covar = np.eye(Nx) * 1e-5 # Initial covar input matrix
         Q = np.eye(Ny)
-        R= np.diag(Nx - Ny)
+        R= np.eye(Nx - Ny)
 
 
         for i in range(len(methods)):
