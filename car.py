@@ -17,8 +17,8 @@ path.append(r"./GP_MPC/")
 import numpy as np
 import casadi as ca
 import matplotlib.pyplot as plt
-from matplotlib.patches import Ellipse
-from gp_mpc import Model, GP, MPC
+from matplotlib.patches import Ellipse, Rectangle
+from gp_mpc import Model, GP, MPC, plot_eig, lqr
 import scipy.linalg
 
 
@@ -30,12 +30,13 @@ def plot_car(x ,y):
     ax.axhline(y=road_bound, color='r', linestyle='-')
     ax.axhline(y=0, color='g', linestyle='--')
     ax.axhline(y=-road_bound, color='r', linestyle='-')
-    for i in range(np.size(obs_pos,0)):
-        ell = Ellipse(xy=obs_pos[i], width=obs_length*2, height=obs_width*2)
-        obs = Ellipse(xy=obs_pos[i], width=1, height=1)
+
+    for i in range(np.size(obs,0)):
+        ell = Ellipse(xy=obs[i,:2], width=(obs[i,2] + car_length)*2, height=(obs[i,3] + car_width)*2)
+        obsticle = Ellipse(xy=obs[i,:2], width=obs[i,2], height=obs[i,3])
         ax.add_artist(ell)
-        ax.add_artist(obs)
-        obs.set_facecolor('red')
+        ax.add_artist(obsticle)
+        obsticle.set_facecolor('red')
 
     ax.plot(x, y, 'b-', linewidth=1.0)
     ax.set_ylabel('y [m]')
@@ -77,12 +78,12 @@ def constraint_parameters(x):
 #    obs_pos = np.array([[30, .3],
 #               [60, -0.5]])
     car_pos = x[4:]
-    dist = np.sqrt((car_pos[0] - obs_pos[:,0])**2 
-                   + (car_pos[1] - obs_pos[:, 1])**2 )
+    dist = np.sqrt((car_pos[0] - obs[:,0])**2 
+                   + (car_pos[1] - obs[:, 1])**2 )
     if min(dist) > 40:
-        return car_pos * 1000
+        return np.hstack([car_pos * 1000, [0,0]])
 
-    return obs_pos[np.argmin(dist)]
+    return obs[np.argmin(dist)]
 
 
 def inequality_constraints(x, covar, u, eps, par):
@@ -125,16 +126,16 @@ def inequality_constraints(x, covar, u, eps, par):
     con_ineq_lb.append(-road_bound)
 
     """ Obstacle avoidance """
-    Xcg_s = ca.SX.sym('Xcg')
-    Ycg_s = ca.SX.sym('Ycg')
-    pos_s = ca.SX.sym('pos', 2)
-    ellipse = ca.Function('ellipse', [Xcg_s, Ycg_s, pos_s],
-                          [ ((Xcg_s - pos_s[0]) / obs_length)**2
-                           + ((Ycg_s - pos_s[1]) / obs_width)**2] )
-    con_ineq.append(1 - ellipse(x[4], x[5], par) + eps)
-    
-    con_ineq_ub.append(0)
-    con_ineq_lb.append(-np.inf)
+#    Xcg_s = ca.SX.sym('Xcg')
+#    Ycg_s = ca.SX.sym('Ycg')
+#    obs_s = ca.SX.sym('obs', 4)
+#    ellipse = ca.Function('ellipse', [Xcg_s, Ycg_s, obs_s],
+#                          [ ((Xcg_s - obs_s[0]) / (obs_s[2] + car_length))**2
+#                           + ((Ycg_s - obs_s[1]) / (obs_s[3] + car_width))**2] )
+#    con_ineq.append(1 - ellipse(x[4], x[5], par) + eps)
+#    
+#    con_ineq_ub.append(0)
+#    con_ineq_lb.append(-np.inf)
 
     cons = dict(con_ineq=con_ineq,
                 con_ineq_lb=con_ineq_lb,
@@ -162,7 +163,7 @@ uub = [.5, .034]
 xlb = [10.0, -.5, -.15, -.3, .0,  -1.]
 xub = [30.0, .5, .15, .3, 10, 1]
 
-N = 2 # Number of training data
+N = 40 # Number of training data
 
 # Create simulation model
 model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R)
@@ -175,12 +176,10 @@ gp = GP(X, Y, gp_method='TA')
 
 # Test data
 x0 = np.array([13.89, 0.0, 0.0, 0.0, 1.0 , 0.0])
-u0 = [0, 0]
+u0 = [0.0, 0.0]
 cov0 = np.eye(Nx+Nu)
 u_test = np.zeros((100, 2))
 
-#A, B = model.discrete_linearize(x0, u0)
-#eig = scipy.linalg.eig(A)
 
 
 #gp.predict_compare(x0, u_test, model)
@@ -196,11 +195,13 @@ x_sp = np.array([5.8, 0., 0., 0., 20., 0. ])
 slip_min = -4.0 * np.pi / 180
 slip_max = 4.0 * np.pi / 180
 road_bound = 2.0
-obs_pos = np.array([[40, .3],
-               [80, -0.5],
-               [130, 0.]])
-obs_length = 10.
-obs_width = 1.
+car_width = 1.0
+car_length = 10.0
+obs = np.array([[40, .3, 1., 0.2],
+               [80, -0.5, 1., .2],
+               [150, 0., 1., .2]])
+#obs_length = 10.
+#obs_width = 1.
 
 # Penalty values
 P = np.diag([.0, 50., 10, .1, 0, 10])
@@ -210,24 +211,24 @@ R = np.diag([.1, .1])
 S = np.diag([1, 10])
 lam = 10
 
-
-#Q = np.eye(6)
-#R = np.eye(2)
-
 #
-#
-mpc = MPC(horizon=20*dt, gp=gp, model=model,
-          discrete_method='rk4', gp_method='TA', 
+#A, B = model.discrete_linearize(x0, u0)
+#K, S, E = lqr(A, B, Q, R)
+#eig = plot_eig(A - B @ K)
+ 
+
+mpc = MPC(horizon=2*dt, gp=gp, model=model,
+          discrete_method='gp', gp_method='TA', 
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
-          terminal_constraint=None, costFunc='quad', feedback=True,
+          terminal_constraint=None, costFunc='quad', feedback=False,
           solver_opts=solver_opts, 
-          inequality_constraints=inequality_constraints, num_con_par=2
+          inequality_constraints=inequality_constraints, num_con_par=4
           )
 
 
-x, u = mpc.solve(x0, sim_time=200*dt, x_sp=x_sp, debug=False, noise=False,
+x, u = mpc.solve(x0, sim_time=3*dt, x_sp=x_sp, debug=False, noise=False,
                  con_par_func=constraint_parameters)
-#mpc.plot()
+mpc.plot()
 plot_car(x[:, 4], x[:, 5])
 u1 = u[:20,:]
 #model.predict_compare(x[0], u1)
@@ -239,6 +240,9 @@ Z1 = Z[:50,:]
 Y1 = Y[ :50,:]
 Z2 = Z[50:-1,:]
 Y2 = Y[ 50:-1,:]
+
+z = np.hstack([x0,u0])
+
 #gp = GP(Z1, Y1)
 #gp.validate(Z2, Y2)
 #gp.predict_compare(x0, u[:10,:], model)

@@ -17,7 +17,7 @@ import numpy as np
 import casadi as ca
 import time
 
-from gp_mpc import Model, GP, MPC
+from gp_mpc import Model, GP, MPC, plot_eig, lqr
 
 
 def ode(x, u, z, p):
@@ -35,12 +35,12 @@ def ode(x, u, z, p):
     gamma2 = 0.4
 
     dxdt = [
-            (-a1 / A1) * ca.sqrt(2 * g * x[0]) + (a3 / A1 )
-                * ca.sqrt(2 * g * x[2]) + (gamma1 / A1) * u[0],
-            (-a2 / A2) * ca.sqrt(2 * g * x[1]) + a4 / A2 
-                * ca.sqrt(2 * g * x[3]) + (gamma2 / A2) * u[1],
-            (-a3 / A3) * ca.sqrt(2 * g * x[2]) + (1 - gamma2) / A3 * u[1],
-                (-a4 / A4) * ca.sqrt(2 * g * x[3]) + (1 - gamma1) / A4 * u[0]
+            (-a1 / A1) * ca.sqrt(2 * g * x[0] + 1e-3) + (a3 / A1 )
+                * ca.sqrt(2 * g * x[2] + 1e-6) + (gamma1 / A1) * u[0],
+            (-a2 / A2) * ca.sqrt(2 * g * x[1] + 1e-3) + a4 / A2 
+                * ca.sqrt(2 * g * x[3] + 1e-3) + (gamma2 / A2) * u[1],
+            (-a3 / A3) * ca.sqrt(2 * g * x[2] + 1e-3) + (1 - gamma2) / A3 * u[1],
+                (-a4 / A4) * ca.sqrt(2 * g * x[3] + 1e-3) + (1 - gamma1) / A4 * u[0]
     ]
     
     return  ca.vertcat(*dxdt)
@@ -62,7 +62,7 @@ def inequality_constraints(x, covar, u, eps):
 
 solver_opts = {
                 'ipopt.linear_solver' : 'ma27',
-                'ipopt.max_cpu_time' : 10,
+                'ipopt.max_cpu_time' : 20,
                 'expand' : True,
 }
 
@@ -90,14 +90,16 @@ gp = GP(X, Y)
 gp.validate(X_test, Y_test)
 
 x0 = np.array([8., 10., 8., 18.])
+u0 = np.array([50, 50])
 u_test = np.ones((30, 2)) * 50
-gp.predict_compare(x0, u_test, model)
+#gp.predict_compare(x0, u_test, model)
+#model.predict_compare(x0,u_test)
 #model.plot(x0, u_test)
 
 # Limits in the MPC problem
 ulb = [10., 10.]
 uub = [60., 60.]
-xlb = [7.0, 7.0, 7.0, 7.0]
+xlb = [5.0, 5.0, 5.0, 5.0]
 xub = [30., 30., 30., 30.]
 x_sp = np.array([14., 14., 14.2, 21.3])
 
@@ -109,16 +111,21 @@ P = np.array([[10, 0, 0, 0],
               [0, 10, 0, 0],
               [0, 0, 10, 0],
               [0, 0, 0, 10]])
+R = np.diag([.01, .01]) 
 
-mpc = MPC(horizon=12*dt, gp=gp, model=model,
-          gp_method='TA',
+mpc = MPC(horizon=10*dt, gp=gp, model=model,
+          gp_method='ME',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P,
-          terminal_constraint=0, costFunc='quad', feedback=False, 
-          solver_opts=solver_opts, discrete_method='rk4',
+          terminal_constraint=None, costFunc='quad', feedback=False, 
+          solver_opts=solver_opts, discrete_method='gp',
           inequality_constraints=None
           )
 
 
-x, u = mpc.solve(x0, sim_time=15*dt, x_sp=x_sp, debug=False)
+x, u = mpc.solve(x0, u0=u0,sim_time=15*dt, x_sp=x_sp, debug=False, noise=False)
 mpc.plot()
 
+A, B = model.discrete_rk4_linearize(x0, u0)
+K, S, E = lqr(A, B, Q, R)
+#plot_eig(A)
+#eig = plot_eig(A - B @ K)
