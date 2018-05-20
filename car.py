@@ -147,12 +147,12 @@ def inequality_constraints(x, covar, u, eps, par):
 
 solver_opts = {}
 solver_opts['ipopt.linear_solver'] = 'ma27'
-solver_opts['ipopt.max_cpu_time'] = 20
+solver_opts['ipopt.max_cpu_time'] = 10
 #solver_opts['ipopt.max_iter'] = 75
 solver_opts['expand']= True
 
 meanFunc = 'zero'
-dt = 0.05
+dt = 0.01
 Nx = 6
 Nu = 2
 R = np.eye(Nx) * 1e-5
@@ -163,7 +163,7 @@ uub = [.5, .034]
 xlb = [10.0, -.5, -.15, -.3, .0,  -1.]
 xub = [30.0, .5, .15, .3, 10, 1]
 
-N = 40 # Number of training data
+N = 30 # Number of training data
 
 # Create simulation model
 model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R)
@@ -172,17 +172,17 @@ X_test, Y_test = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 
 ## Create GP model
 gp = GP(X, Y, gp_method='TA')
-#gp.validate(X_test, Y_test)
+gp.validate(X_test, Y_test)
 
 # Test data
 x0 = np.array([13.89, 0.0, 0.0, 0.0, 1.0 , 0.0])
 u0 = [0.0, 0.0]
 cov0 = np.eye(Nx+Nu)
-u_test = np.zeros((100, 2))
+u_test = np.zeros((20, 2))
 
 
 
-#gp.predict_compare(x0, u_test, model)
+gp.predict_compare(x0, u_test, model)
 
 # Limits in the MPC problem
 ulb = [-.5, -.034]
@@ -220,7 +220,7 @@ lam = 10
 mpc = MPC(horizon=2*dt, gp=gp, model=model,
           discrete_method='gp', gp_method='TA', 
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
-          terminal_constraint=None, costFunc='quad', feedback=False,
+          terminal_constraint=None, costFunc='quad', feedback=True,
           solver_opts=solver_opts, 
           inequality_constraints=inequality_constraints, num_con_par=4
           )
@@ -228,20 +228,20 @@ mpc = MPC(horizon=2*dt, gp=gp, model=model,
 
 x, u = mpc.solve(x0, sim_time=3*dt, x_sp=x_sp, debug=False, noise=False,
                  con_par_func=constraint_parameters)
-mpc.plot()
-plot_car(x[:, 4], x[:, 5])
-u1 = u[:20,:]
-#model.predict_compare(x[0], u1)
+#mpc.plot()
+#plot_car(x[:, 4], x[:, 5])
+#u1 = u[:20,:]
+##model.predict_compare(x[0], u1)
 ## Use previous data to train GP
-X = x[:-1,:]
-Y = x[1:,:]
-Z = np.hstack([X, u])
-Z1 = Z[:50,:]
-Y1 = Y[ :50,:]
-Z2 = Z[50:-1,:]
-Y2 = Y[ 50:-1,:]
-
-z = np.hstack([x0,u0])
+#X = x[:-1,:]
+#Y = x[1:,:]
+#Z = np.hstack([X, u])
+#Z1 = Z[:50,:]
+#Y1 = Y[ :50,:]
+#Z2 = Z[50:-1,:]
+#Y2 = Y[ 50:-1,:]
+#
+#z = np.hstack([x0,u0])
 
 #gp = GP(Z1, Y1)
 #gp.validate(Z2, Y2)

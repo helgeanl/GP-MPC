@@ -7,8 +7,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from sys import path
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
 
 import numpy as np
 import casadi as ca
@@ -20,7 +18,6 @@ def covSEard(x, z, ell, sf2):
     """ GP squared exponential kernel """
     dist = ca.sum1((x - z)**2 / ell**2)
     return sf2 * ca.SX.exp(-.5 * dist)
-
 
 
 def get_mean_function(hyper, X, func='zero'):
@@ -62,7 +59,7 @@ def get_mean_function(hyper, X, func='zero'):
     return ca.Function('mean', [Z_s], [meanF(Z_s, hyper)])
 
 
-def build_gp(invK, X, hyper, alpha, meanFunc='zero'):
+def build_gp(invK, X, hyper, alpha, chol, meanFunc='zero'):
     """ Build Gaussian Process function
 
     # Arguments
@@ -93,11 +90,10 @@ def build_gp(invK, X, hyper, alpha, meanFunc='zero'):
     m_s        = ca.SX.sym('m')
     ell_s      = ca.SX.sym('ell', Nx)
     sf2_s      = ca.SX.sym('sf2')
-    invK_s     = ca.SX.sym('invK', N, N)
     X_s        = ca.SX.sym('X', N, Nx)
     ks_s       = ca.SX.sym('ks', N)
+    v_s       = ca.SX.sym('v', N)
     kss_s      = ca.SX.sym('kss')
-    ksT_invK_s = ca.SX.sym('ksT_invK', 1, N)
     alpha_s    = ca.SX.sym('alpha', N)
 
     covSE = ca.Function('covSE', [x_s, z_s, ell_s, sf2_s],
@@ -110,24 +106,23 @@ def build_gp(invK, X, hyper, alpha, meanFunc='zero'):
 
     mean_i_func = ca.Function('mean', [ks_s, alpha_s, m_s], 
                             [ca.mtimes(ks_s.T, alpha_s) + m_s])
-
-    ksT_invK_func = ca.Function('ksT_invK', [ks_s, invK_s],
-                           [ca.mtimes(ks_s.T, invK_s)])    
-
-    var_i_func  = ca.Function('var', [ks_s, kss_s, ksT_invK_s],
-                            [kss_s - ca.mtimes(ksT_invK_s, ks_s)])
+    
+    L_s = ca.SX.sym('L', ca.Sparsity.lower(N))
+    v_func = ca.Function('v', [L_s, ks_s], [ca.solve(L_s, ks_s)])
+    
+    var_i_func  = ca.Function('var', [v_s, kss_s,],
+                            [kss_s - v_s.T @ v_s])
 
     for output in range(Ny):
         ell      = ca.SX(hyper[output, 0:Nx])
         sf2      = ca.SX(hyper[output, Nx]**2)
-        invK_a   = ca.SX(invK[output])
         alpha_a  = ca.SX(alpha[output])
         ks       = ks_func(X_s, z_s, ell, sf2)
-        ksT_invK = ksT_invK_func(ks, invK_a)
+        v        = v_func(chol[output], ks)
         m = get_mean_function(ca.MX(hyper[output, :]), z_s.T, func=meanFunc)
-
         mean[output] = mean_i_func(ks, alpha_a, m(z_s))
-        var[output]  = var_i_func(ks, sf2, ksT_invK) 
+        var[output]  = var_i_func(v, sf2) 
+
 
     mean_temp  = ca.Function('mean_temp', [z_s, X_s], [mean])
     var_temp   = ca.Function('var_temp',  [z_s, X_s], [var])
@@ -157,9 +152,10 @@ def build_TA_cov(mean, covar, jac, Nx, Ny):
     """
     cov_z  = ca.SX.sym('cov_z', Nx, Nx)
     z_s    = ca.SX.sym('z', Nx)
-    jitter = ca.SX.ones(Ny, Ny)*1e-7 # Help against numerical noise
+    jac_z = jac(z_s)
     cov    = ca.Function('cov', [z_s, cov_z], 
-                      [covar(z_s) + jac(z_s) @ cov_z @ jac(z_s).T + jitter])
+                      [covar(z_s) + jac_z @ cov_z @ jac_z.T])
+
     return cov
 
 
@@ -310,6 +306,7 @@ def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputcovar,
         var[a] = kss - ca.mtimes(ks.T, invKks)
         d_mean[a] = ca.mtimes(ca.transpose(w[a] * v[:, a] * ks), alpha)
 
+        #BUG: This don't take into account the covariance between states
         for d in range(Ny):
             for e in range(Ny):
                 dd_var1a = ca.mtimes(ca.transpose(v[:, d] * ks), iK)
@@ -360,6 +357,7 @@ def gp_exact_moment(invK, X, Y, hyper, inputmean, inputcov):
 
     covariance = ca.MX.zeros(Ny, Ny)
 
+    #TODO: Fix that LinsolQr don't work with the extended graph
     A = ca.SX.sym('A', inputcov.shape)
     [Q, R2] = ca.qr(A)
     determinant = ca.Function('determinant', [A], [ca.exp(ca.trace(ca.log(R2)))])
@@ -413,7 +411,7 @@ def maha(a1, b1, Q1, N):
     return K1
 
 
-
+#TODO: This can be removed?
 def predict(X, Y, invK, hyper, x0, u, sim_system):
 
     # Predict future
@@ -504,7 +502,7 @@ def predict(X, Y, invK, hyper, x0, u, sim_system):
                2 * sd_TA_i, color="#FFFaaa", label='95% conf interval TA')
         plt.gca().fill_between(t.flat, mu_ME_i - 2 * sd_ME_i, mu_ME_i +
                2 * sd_ME_i, color="#bbbbbb", label='95% conf interval ME')
-
+        
         #plt.errorbar(t, mu_EM_i, yerr=2 * sd_EM_i, label='95% conf interval EM')
         #plt.errorbar(t, mu_TA_i, yerr=2 * sd_TA_i, label='95% conf interval TA')
         #plt.errorbar(t, mu_EM_i, yerr=2 * sd_ME_i, label='95% conf interval ME')

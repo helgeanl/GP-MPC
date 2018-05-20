@@ -40,6 +40,7 @@ class GP:
         self.__hyper = opt['hyper']
         self.__invK  = opt['invK']
         self.__alpha = opt['alpha']
+        self.__chol  = opt['chol']
         self.__hyper_length_scales   = self.__hyper[:, :self.__Nx]
         self.__hyper_signal_variance = self.__hyper[:, self.__Nx]**2
         self.__hyper_noise_variance = self.__hyper[:, self.__Nx + 1]**2
@@ -47,7 +48,7 @@ class GP:
 
         # Build GP
         self.__mean, self.__covar, self.__mean_jac = build_gp(self.__invK, self.__X, 
-                                                     self.__hyper, self.__alpha)
+                                                     self.__hyper, self.__alpha, self.__chol)
         self.__TA_covar = build_TA_cov(self.__mean, self.__covar,
                                        self.__mean_jac, self.__Nx, self.__Ny)
         
@@ -80,19 +81,10 @@ class GP:
         self.__gp_method = gp_method
 
         if gp_method is 'ME':
-#            self.predict = ca.Function('gp_mean', [x, u, covar_s],
-#                                gp(self.__invK, ca.MX(self.__X), ca.MX(self.__Y),
-#                                   ca.MX(self.__hyper),
-#                                   ca.vertcat(x, u).T, meanFunc=self.__mean_func))
             self.predict = ca.Function('gp_mean', [x, u, covar_s],
                                 [self.__mean(ca.vertcat(x,u)),
                                  self.__covar(ca.vertcat(x,u))])
         elif gp_method is 'TA':
-#            self.predict = ca.Function('gp_taylor_approx', [x, u, covar_s],
-#                                gp_taylor_approx(self.__invK, ca.MX(self.__X),
-#                                        ca.MX(self.__Y), ca.MX(self.__hyper),
-#                                        ca.vertcat(x, u).T, covar_s,
-#                                        meanFunc=self.__mean_func, diag=True))
             self.predict = ca.Function('gp_taylor', [x, u, covar_s],
                                 [self.__mean(ca.vertcat(x,u)),
                                  self.__TA_covar(ca.vertcat(x,u), covar_s)])
@@ -101,6 +93,17 @@ class GP:
                                 gp_exact_moment(self.__invK, ca.MX(self.__X),
                                         ca.MX(self.__Y), ca.MX(self.__hyper),
                                         ca.vertcat(x, u).T, covar_s))
+        elif gp_method is 'old_ME':
+            self.predict = ca.Function('gp_mean', [x, u, covar_s],
+                                gp(self.__invK, ca.MX(self.__X), ca.MX(self.__Y),
+                                   ca.MX(self.__hyper),
+                                   ca.vertcat(x, u).T, meanFunc=self.__mean_func))
+        elif gp_method is 'old_TA':
+            self.predict = ca.Function('gp_taylor_approx', [x, u, covar_s],
+                                gp_taylor_approx(self.__invK, ca.MX(self.__X),
+                                        ca.MX(self.__Y), ca.MX(self.__hyper),
+                                        ca.vertcat(x, u).T, covar_s,
+                                        meanFunc=self.__mean_func, diag=True))
         else:
             raise NameError('No GP method called: ' + gp_method)
 
@@ -122,13 +125,13 @@ class GP:
         Bd = np.array(self.__discrete_jac_u(x0, u0, cov0))
         return Ad, Bd
 
-
+            
     def noise_variance(self):
         """ Get the noise variance
         """
         return self.__hyper_noise_variance
 
-
+#TODO: Fix this
     def sparse(self, M):
         """ Sparse Gaussian Process
             Use Fully Independent Training Conditional (FITC) to approximate
@@ -137,6 +140,7 @@ class GP:
         # Arguments:
             M: Reduce the model size from N to M.
         """
+
 
     def predict_compare(self, x0, u, model, num_cols=2, xnames=None, 
                         title=None, feedback=False):
@@ -151,6 +155,7 @@ class GP:
         sim_time = Nt * dt
         initVar = self.__hyper[:,Nx + 1]**2
         methods = ['EM', 'TA', 'ME']
+        color = ['k', 'y', 'r']
         mean = np.zeros((len(methods), Nt + 1 , Ny))
         var = np.zeros((len(methods), Nt + 1, Ny))
         covar = np.eye(Nx) * 1e-5 # Initial covar input matrix
@@ -196,7 +201,7 @@ class GP:
             for k in range(len(methods)):
                 mean_i = mean[k, :, i]
                 sd_i = np.sqrt(var[k, :, i])
-                ax.errorbar(t, mean_i, yerr=2 * sd_i,
+                ax.errorbar(t, mean_i, yerr=2 * sd_i, color = color[k],
                              label='GP ' + methods[k])
             ax.set_ylabel(xnames[i])
             ax.legend(prop=fontP, loc='best')
@@ -208,3 +213,4 @@ class GP:
                                          'Max Standarized Mean Squared Error: {z:.3g}'
                                         ).format(x=self.__N, y=self.__mean_func,
                                                 z=self._SMSE))
+        plt.show()

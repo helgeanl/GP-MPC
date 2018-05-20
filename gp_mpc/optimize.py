@@ -159,6 +159,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     lam_x_opt = np.zeros((Ny, num_hyp))
     invK = np.zeros((Ny, N, N))
     alpha = np.zeros((Ny, N))
+    chol = np.zeros((Ny, N, N))
 
     print('\n________________________________________')
     print('# Optimizing hyperparameters (N=%d)' % N )
@@ -238,9 +239,10 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
             L = np.linalg.cholesky(K)
         invL = np.linalg.solve(L, np.eye(N))
         invK[output, :, :] = np.linalg.solve(L.T, invL)
+        chol[output] = L
         m = get_mean_function(ca.MX(hyp_opt[output, :]), X, func=meanFunc)
         mean = np.array(m(X)).reshape((N,))
-        alpha[output] = np.dot(invK[output], Y[:, output] - mean)
+        alpha[output] = np.linalg.solve(L.T, np.linalg.solve(L, Y[:, output] - mean))
     print('----------------------------------------')
 
     opt = {}
@@ -248,6 +250,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     opt['lam_x'] = lam_x_opt
     opt['invK'] = invK
     opt['alpha'] = alpha
+    opt['chol'] = chol
     return opt
 
 

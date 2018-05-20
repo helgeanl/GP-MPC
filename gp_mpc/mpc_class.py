@@ -84,7 +84,9 @@ class MPC:
         self.__Nu = Nu
         self.__num_con_par = num_con_par
         self.__model = model
+        self.__gp = gp
         self.__feedback = feedback
+        self.__discrete_method = discrete_method
         
 
         """ Default penalty values """
@@ -103,14 +105,24 @@ class MPC:
         self.__P = P
         self.__R = R
         self.__S = S
+        
+        if xub is None:
+            xub = np.full((Ny), np.inf)
+        if xlb is None:
+            xlb = np.full((Ny), -np.inf)
+        if uub is None:
+            uub = np.full((Nu), np.inf)
+        if ulb is None:
+            ulb = np.full((Nu), -np.inf)
+            
       
-
+        eps_sqrt = 1e-5
         #TODO: Clean this up
         percentile = 0.95
         quantile_x = np.ones(Ny) * norm.ppf(percentile)
         quantile_u = np.ones(Nu) * norm.ppf(percentile)
-        H_x = ca.MX.eye(Ny)
-        H_u = ca.MX.eye(Nu)
+        Hx = ca.MX.eye(Ny)
+        Hu = ca.MX.eye(Nu)
 
 
         # Create parameter symbols
@@ -127,7 +139,7 @@ class MPC:
 
         """ Select wich GP function to use """
         if discrete_method is 'gp':
-            gp.set_method(gp_method)
+            self.__gp.set_method(gp_method)
         
         if solver_opts['expand'] is not False and discrete_method is 'exact':
             raise NameError("Can't use exact discrete system with expanded graph")
@@ -155,6 +167,7 @@ class MPC:
                 ctools.entry('mean', shape=(Ny,), repeat=Nt + 1),
                 ctools.entry('covariance', shape=(Ny * Ny,), repeat=Nt + 1),
                 ctools.entry('v', shape=(Nu,), repeat=Nt),
+                ctools.entry('sparse', shape=(Ny * Ny,), repeat=Nt + 1),
                 ctools.entry('eps', repeat=Nt),
         )])
         self.__var = var
@@ -164,9 +177,10 @@ class MPC:
         self.__varlb = var(-np.inf)
         self.__varub = var(np.inf)
 
-        # Adjust boundries
+        """ Adjust hard boundries """
         for t in range(Nt):
-            self.__varlb['covariance', t] = np.full((Ny * Ny,), 0)
+            for i in range(Ny):
+                self.__varlb['covariance', t] = 1e-9*np.eye(Ny).flatten()
             self.__varlb['eps', t] = 0
             if xub is not None:
                 self.__varub['mean', t] = xub
@@ -185,17 +199,17 @@ class MPC:
         con_eq.append(var['covariance', 0] - covariance_0_s)
         u_past = u_0_s
         
-        """ Fill the input covariance matrix """
+        """ Input covariance matrix """
         covar_x_s = ca.MX.sym('covar_x', Ny, Ny)
         covar_x_sx = ca.SX.sym('cov_x', Ny, Ny)
         K_sx = ca.SX.sym('K', Nu, Ny)
 
         covar_u_func = ca.Function('cov_u', [covar_x_sx, K_sx], 
                                    [K_sx @ covar_x_sx @ K_sx.T])
-        
+
         cov_xu_func = ca.Function('cov_xu', [covar_x_sx, K_sx], 
                                   [covar_x_sx @ K_sx.T])
-        
+
         covar_s = ca.MX(Nx, Nx)
         cov_xu = cov_xu_func(covar_x_s, K_s.reshape((Nu, Ny)))
         covar_s[:Ny, :Ny] = covar_x_s
@@ -204,61 +218,52 @@ class MPC:
         covar_s[:Ny, Ny:] = cov_xu
         covar_func = ca.Function('covar', [covar_x_s], [covar_s])
         
-        covar_t = ca.MX(Nx, Nx)
+        """ Build constraints """
         for t in range(Nt):
             # Input to GP
-            u_t = u_func(var['mean', t], var['v', t], K_s)
+            mean_t = var['mean', t]
+            u_t = u_func(mean_t, var['v', t], K_s)
 
             covar_x_t = var['covariance', t].reshape((Ny, Ny))
-#            covar_t[:Ny, :Ny] = covar_x_t
             covar_t = covar_func(covar_x_t)
 
             # Choose between GP and RK4 for next step
             if discrete_method is 'rk4':
-                mean_next = model.rk4(var["mean",t], u_t,[])
-                covar_x_next = ca.MX(Ny, Ny)
+                mean_next_pred = model.rk4(mean_t, u_t,[])
+                covar_x_next_pred = ca.MX(Ny, Ny)
             elif discrete_method is 'exact':
-                mean_next = model.Integrator(x0=var["mean",t], p=u_t)['xf']
-                covar_x_next = ca.MX(Ny, Ny)
+                mean_next_pred = model.Integrator(x0=mean_t, p=u_t)['xf']
+                covar_x_next_pred = ca.MX(Ny, Ny)
             else:
-                mean_next, covar_x_next = gp.predict(var['mean',t], u_t, covar_t)
+                mean_next_pred, covar_x_next_pred = self.__gp.predict(mean_t, u_t, covar_t)
 
             # Continuity constraints
-            con_eq.append(mean_next - var['mean', t + 1] )
-            con_eq.append(covar_x_next.reshape((Ny * Ny, 1)) - var['covariance', t + 1])
+            mean_next = var['mean', t + 1]
+            covar_x_next = var['covariance', t + 1]
+            con_eq.append(mean_next_pred - mean_next )
+            con_eq.append(covar_x_next_pred.reshape((Ny * Ny, 1)) - covar_x_next)
 
             # Chance state constraints
             if xub is not None:
-                con_ineq.append(mean_next + quantile_x * ca.sqrt(ca.diag(covar_x_next) ))
+                con_ineq.append(mean_t + quantile_x * ca.sqrt(ca.diag(covar_x_t.reshape((Ny, Ny))) + eps_sqrt))
                 con_ineq_ub.append(xub)
                 con_ineq_lb.append(np.full((Ny,), -ca.inf))
             if xlb is not None:
-                con_ineq.append(mean_next - quantile_x * ca.sqrt(ca.diag(covar_x_next)))
+                con_ineq.append(mean_t - quantile_x * ca.sqrt(ca.diag(covar_x_t.reshape((Ny, Ny))) + eps_sqrt))
                 con_ineq_ub.append(np.full((Ny,), ca.inf))
                 con_ineq_lb.append(xlb)
 
             # Input constraints
             cov_u = covar_u_func(covar_x_t, K_s.reshape((Nu, Ny)))
             if uub is not None:
-                con_ineq.append(u_t + quantile_u * ca.sqrt(ca.diag(cov_u) + 1e-6))
+                con_ineq.append(u_t)
                 con_ineq_ub.extend(uub)
                 con_ineq_lb.append(np.full((Nu,), -ca.inf))
             if ulb is not None:
-                con_ineq.append(u_t - quantile_u * ca.sqrt(ca.diag(cov_u) + 1e-6))
+                con_ineq.append(u_t)
                 con_ineq_ub.append(np.full((Nu,), ca.inf))
                 con_ineq_lb.append(ulb)
            
-    
-#            cov_u = ca.MX(Nu,Nu)
-#            if uub is not None:
-#                con_ineq.append(u_t)
-#                con_ineq_ub.extend(uub)
-#                con_ineq_lb.append(np.full((Nu,), -ca.inf))
-#            if ulb is not None:
-#                con_ineq.append(u_t )
-#                con_ineq_ub.append(np.full((Nu,), ca.inf))
-#                con_ineq_lb.append(ulb)
-
             # Add extra constraints
             if inequality_constraints is not None:
                 cons = inequality_constraints(var['mean', t],
@@ -294,7 +299,7 @@ class MPC:
         options = {
             'ipopt.print_level' : 0,
             'ipopt.mu_init' : 0.01,
-            'ipopt.tol' : 1e-6,
+            'ipopt.tol' : 1e-8,
             'ipopt.warm_start_init_point' : 'yes',
             'ipopt.warm_start_bound_push' : 1e-9,
             'ipopt.warm_start_bound_frac' : 1e-9,
@@ -362,10 +367,12 @@ class MPC:
 
         # Initialize variables
         self.__mean          = np.full((self.__Nsim + 1, Ny), x0)
+        self.__mean_pred     = np.full((self.__Nsim + 1, Ny), x0)
         self.__covariance    = np.ones((self.__Nsim + 1, Ny, Ny)) * 1e-5
         self.__u             = np.full((self.__Nsim, Nu), u0)
 
         self.__mean[0]       = x0
+        self.__mean_pred[0]  = x0
         self.__covariance[0] = np.diag(self.__variance_0)
         self.__u[0]          = u0
 
@@ -378,10 +385,16 @@ class MPC:
         
         # Linearize around operating point and calculate LQR gain matrix
         if self.__feedback:
-            Ad, Bd = self.__model.discrete_linearize(x0, u0)
+            if self.__discrete_method is 'exact':
+                Ad, Bd = self.__model.discrete_linearize(x0, u0)
+            elif self.__discrete_method is 'rk4':
+                Ad, Bd = self.__model.discrete_rk4_linearize(x0, u0)
+            elif self.__discrete_method is 'gp':
+                Ad, Bd = self.__gp.discrete_linearize(x0, u0, np.eye(self.__Nx)*1e-2)
             K, S, E = lqr(Ad, Bd, self.__Q, self.__R)
         else:
             K = np.zeros((Nu, Ny))
+        self.__K = K
 
         print('\nSolving MPC with %d step horizon' % Nt)
         for t in range(self.__Nsim):
@@ -432,8 +445,8 @@ class MPC:
             v = optvar['v', 0, :]
 
             self.__u[t, :] = np.array(self.__u_func(self.__mean[t, :], v, K.flatten())).flatten()
-            #TODO: Fix this
-            self.__covariance[t + 1, :] = np.array(optvar['covariance', -1, :].reshape((Ny, Ny)))
+            self.__mean_pred[t + 1] = np.array(optvar['mean', 1]).flatten()
+            self.__covariance[t + 1] = np.array(optvar['covariance', 1].reshape((Ny, Ny)))
 
             if debug:
                 self.__debug(t)
@@ -563,8 +576,8 @@ class MPC:
                 + trace_x(Q, covar_x)  + trace_u(R, covar_u)
 
 
-    def __constraint(self, mean, covar, H, quantile):
-        # NOT IN USE
+    def __constraint(self, mean, covar, H, quantile, ub, lb):
+        """ Build up chance constraint """
         r = ca.SX.sym('r')
         mean_s = ca.SX.sym('mean', ca.MX.size(mean))
         covar_s = ca.SX.sym('r', ca.MX.size(covar))
@@ -573,11 +586,17 @@ class MPC:
         con_func = ca.Function('con', [mean_s, covar_s, H_s, r],
                                [H_s @ mean_s + r * ca.sqrt(H_s @ covar_s @ H_s.T)])
         con = []
-        r = quantile
-
+        con_lb = []
+        con_ub = []        
         for i in range(ca.MX.size1(mean)):
             con.append(con_func(mean, covar, H[i, :], quantile[i]))
-        return con
+            con_ub.append(ub[i])
+            con_lb.append(-np.inf)
+            con.append(con_func(mean, covar, H[i, :], -quantile[i]))
+            con_ub.append(np.inf)
+            con_lb.append(lb[i])
+        cons = dict(con=con, con_lb=con_lb, con_ub=con_ub)
+        return cons
 
 
     def __debug(self, t):
@@ -600,11 +619,18 @@ class MPC:
         x = self.__mean
         u = self.__u
         dt = self.__dt
-        x_pred = self.__mean_prediction
-        var_pred = self.__var_prediction
-
         Nu = self.__Nu
         Nt_sim, Nx = x.shape
+        # First predictin horizon
+        x_pred = self.__mean_prediction
+        var_pred = self.__var_prediction
+        # One step prediction
+        var = np.zeros((Nt_sim, Nx))
+        mean = self.__mean_pred
+        for t in range(Nt_sim):
+            var[t] = np.diag(self.__covariance[t])
+
+        
         x_sp = self.__x_sp * np.ones((Nt_sim, Nx))
 
         if x_pred is not None:
@@ -631,12 +657,14 @@ class MPC:
         fig_x = plt.figure()
         for i in range(Nx):
             ax = fig_x.add_subplot(numrows, numcols, i + 1)
-            ax.plot(t, x[:, i], 'b-', marker='.', linewidth=1.0, label='Simulation')
+            ax.plot(t, x[:, i], 'k-', marker='.', linewidth=1.0, label='Simulation')
+            ax.errorbar(t, mean[:, i], yerr=2 * np.sqrt(var[:, i]), marker='.',
+                            linestyle='None', color='b', label='One step prediction')
             if x_sp is not None:
                 ax.plot(t, x_sp[:, i], color='g', linestyle='--', label='Setpoint')
             if x_pred is not None:
                 ax.errorbar(t_horizon, x_pred[:, i], yerr=2 * np.sqrt(var_pred[:, i]),
-                            linestyle='None', marker='.', color='r', label='1st prediction')
+                            linestyle='None', marker='.', color='r', label='1st prediction horizon')
             plt.legend(loc='best')
             ax.set_ylabel(xnames[i])
             ax.set_xlabel('Time [' + time_unit + ']')
