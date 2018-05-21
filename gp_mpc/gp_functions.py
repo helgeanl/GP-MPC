@@ -28,9 +28,9 @@ def get_mean_function(hyper, X, func='zero'):
                 'polynomial': m(x) = aT*x^2 + bT*x + c
     """
 
-    N, Nx = X.shape
-    X_s = ca.SX.sym('x', N, Nx)
-    Z_s = ca.MX.sym('x', N, Nx)
+    Nx, N = X.shape
+    X_s = ca.SX.sym('x', Nx, N)
+    Z_s = ca.MX.sym('x', Nx, N)
     m = ca.SX(N, 1)
     hyp_s = ca.SX.sym('hyper', hyper.shape)
     if func == 'zero':
@@ -41,17 +41,17 @@ def get_mean_function(hyper, X, func='zero'):
             m[i] = a
         meanF = ca.Function('const_mean', [X_s, hyp_s], [m])
     elif func == 'linear':
-        a = hyp_s[-Nx-1:-1]
+        a = hyp_s[-Nx-1:-1].reshape((1, Nx))
         b = hyp_s[-1]
         for i in range(N):
-            m[i] = ca.mtimes(a, X_s[i, :].T) + b
+            m[i] = ca.mtimes(a, X_s[:,i]) + b
         meanF = ca.Function('linear_mean', [X_s, hyp_s], [m])
     elif func == 'polynomial':
-        a = hyp_s[-2*Nx-1:-Nx-1]
-        b = hyp_s[-Nx-1:-1]
+        a = hyp_s[-2*Nx-1:-Nx-1].reshape((1,Nx))
+        b = hyp_s[-Nx-1:-1].reshape((1,Nx))
         c = hyp_s[-1]
         for i in range(N):
-            m[i] = ca.mtimes(a, X_s[i, :].T**2) + ca.mtimes(b, X_s[i, :].T) + c
+            m[i] = ca.mtimes(a, X_s[:, i]**2) + ca.mtimes(b, X_s[:,i]) + c
         meanF = ca.Function('poly_mean', [X_s, hyp_s], [m])
     else:
         raise NameError('No mean function called: ' + func)
@@ -119,7 +119,7 @@ def build_gp(invK, X, hyper, alpha, chol, meanFunc='zero'):
         alpha_a  = ca.SX(alpha[output])
         ks       = ks_func(X_s, z_s, ell, sf2)
         v        = v_func(chol[output], ks)
-        m = get_mean_function(ca.MX(hyper[output, :]), z_s.T, func=meanFunc)
+        m = get_mean_function(ca.MX(hyper[output, :]), z_s, func=meanFunc)
         mean[output] = mean_i_func(ks, alpha_a, m(z_s))
         var[output]  = var_i_func(v, sf2) 
 

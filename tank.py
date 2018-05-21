@@ -77,7 +77,7 @@ uub = [60., 60.]
 xlb = [.0, .0, .0, .0]
 xub = [30., 30., 30., 30.]
 
-N = 20 # Number of training data
+N = 40 # Number of training data
 
 # Create simulation model
 model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R, clip_negative=True)
@@ -85,16 +85,18 @@ X, Y           = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 X_test, Y_test = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 
 # Create GP model
-gp = GP(X, Y, mean_func=meanFunc)
+gp = GP(X, Y, mean_func=meanFunc, normalize=True)
 gp.validate(X_test, Y_test)
+gp.save_model('gp_tank')
+#gp2 = GP.load_model('gp_tank')
 
-gp.save_model('test_model')
-gp2 = GP.load_model('test_model')
-gp2.validate(X_test, Y_test)
+
 x0 = np.array([8., 10., 8., 18.])
 u0 = np.array([45, 34])
-u_test = np.full((50, 2), [35, 56]) 
-#gp.predict_compare(x0, u_test, model)
+u_test = np.full((20, 2), [35, 56]) 
+gp.predict_compare(x0, u_test, model)
+
+
 #model.predict_compare(x0,u_test)
 #model.plot(x0, u_test)
 

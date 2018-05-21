@@ -7,9 +7,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from sys import path
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
-
 import numpy as np
 import casadi as ca
 import matplotlib.pyplot as plt
@@ -20,21 +17,32 @@ from .mpc_class import lqr
 
 class GP:
     def __init__(self, X, Y, mean_func="zero", gp_method="TA",
-                 optimizer_opts=None, hyper=None):
+                 optimizer_opts=None, hyper=None, normalize=True, lb=None, ub=None):
         """ Initialize and optimize GP model
 
         """
 
-        X = np.array(X)
-        Y = np.array(Y)
-
+        X = np.array(X).copy()
+        Y = np.array(Y).copy()
+        
         self.__Ny = Y.shape[1]
         self.__Nx = X.shape[1]
         self.__N = X.shape[0]
         self.__Nu = self.__Nx - self.__Ny
+        
+        self.__meanY = np.mean(Y, 0)
+        self.__stdY = np.std(Y, 0)
+        
         self.__X = X
-        self.__Y = Y
+        if normalize:
+            self.__Y = self.standardize(Y)
+            self.__X[:, :self.__Ny] = self.standardize(X[:, :self.__Ny])
+        else:
+            self.__Y = Y
+        
+        
         self.__mean_func = mean_func
+        self.__normalize = normalize
         self.__gp_method = gp_method
 
         """ Optimize hyperparameters """
@@ -68,18 +76,15 @@ class GP:
         self.set_method(gp_method)
 
 
-    def gp_test(self, z):
-        return self.__mean(z), self.__covar(z)
-
-
-    def gp_TA_test(self, z, covar):
-        return self.__mean(z), self.__TA_covar(z, covar)
-
-
     def validate(self, X_test, Y_test):
         """ Validate GP model with test data """
+        Y_test = Y_test.copy()
+        X_test = X_test.copy()
+        if self.__normalize:
+            Y_test = self.standardize(Y_test)
+            X_test[:, :self.__Ny] = self.standardize(X_test[:, :self.__Ny])
         SMSE = validate(X_test, Y_test, self.__X, self.__Y, self.__invK,
-                 self.__hyper, self.__mean_func)
+                        self.__hyper, self.__mean_func)
         self.__SMSE = np.max(SMSE)
 
 
@@ -92,25 +97,25 @@ class GP:
         self.__gp_method = gp_method
 
         if gp_method is 'ME':
-            self.predict = ca.Function('gp_mean', [x, u, covar_s],
+            self.__predict = ca.Function('gp_mean', [x, u, covar_s],
                                 [self.__mean(ca.vertcat(x,u)),
                                  self.__covar(ca.vertcat(x,u))])
         elif gp_method is 'TA':
-            self.predict = ca.Function('gp_taylor', [x, u, covar_s],
+            self.__predict = ca.Function('gp_taylor', [x, u, covar_s],
                                 [self.__mean(ca.vertcat(x,u)),
                                  self.__TA_covar(ca.vertcat(x,u), covar_s)])
         elif gp_method is 'EM':
-            self.predict = ca.Function('gp_exact_moment', [x, u, covar_s],
+            self.__predict = ca.Function('gp_exact_moment', [x, u, covar_s],
                                 gp_exact_moment(self.__invK, ca.MX(self.__X),
                                         ca.MX(self.__Y), ca.MX(self.__hyper),
                                         ca.vertcat(x, u).T, covar_s))
         elif gp_method is 'old_ME':
-            self.predict = ca.Function('gp_mean', [x, u, covar_s],
+            self.__predict = ca.Function('gp_mean', [x, u, covar_s],
                                 gp(self.__invK, ca.MX(self.__X), ca.MX(self.__Y),
                                    ca.MX(self.__hyper),
                                    ca.vertcat(x, u).T, meanFunc=self.__mean_func))
         elif gp_method is 'old_TA':
-            self.predict = ca.Function('gp_taylor_approx', [x, u, covar_s],
+            self.__predict = ca.Function('gp_taylor_approx', [x, u, covar_s],
                                 gp_taylor_approx(self.__invK, ca.MX(self.__X),
                                         ca.MX(self.__Y), ca.MX(self.__hyper),
                                         ca.vertcat(x, u).T, covar_s,
@@ -119,9 +124,42 @@ class GP:
             raise NameError('No GP method called: ' + gp_method)
 
         self.__discrete_jac_x = ca.Function('jac_x', [x, u, covar_s],
-                                      [ca.jacobian(self.predict(x,u, covar_s)[0], x)])
+                                      [ca.jacobian(self.__predict(x,u, covar_s)[0], x)])
         self.__discrete_jac_u = ca.Function('jac_x', [x, u, covar_s],
-                                      [ca.jacobian(self.predict(x,u,covar_s)[0], u)])
+                                      [ca.jacobian(self.__predict(x,u,covar_s)[0], u)])
+
+
+    def predict(self, x, u, cov):
+        if self.__normalize:
+            x_s = self.standardize(x)
+        else:
+            x_s = x
+        mean, cov = self.__predict(x_s, u, cov)
+        if self.__normalize:
+            mean = self.inverse_mean(mean)
+            cov = self.inverse_covariance(cov)
+        return mean, cov
+
+
+    def standardize(self, Y):
+        
+        return (Y - self.__meanY) / self.__stdY
+    
+    def standardizeX(self, X):
+        return (X - self.__meanX) / self.__stdX
+    
+    def standardize_x(self, X):
+        return (X - self.__meanX[:self.__Ny]) / self.__stdX[:self.__Ny]
+    
+    def standardize_u(self, X):
+        return (X - self.__meanX[self.__Ny:]) / self.__stdX[self.__Ny:]
+    
+    def inverse_mean(self, Y):     
+        return (Y * self.__stdY) + self.__meanY
+    
+    def inverse_covariance(self, covariance):
+#        return (covariance[..., np.newaxis] * self.__stdY**2)
+        return covariance #* self.__stdY**2
 
 
     def discrete_linearize(self, x0, u0, cov0):
@@ -168,9 +206,10 @@ class GP:
                     mean = self.__hyper_mean.tolist()
                 )        
         gp_dict['mean_func'] = self.__mean_func
+        gp_dict['normalize'] = self.__normalize
         return gp_dict
 
-    
+
     def save_model(self, output_filename):
         """ Save model to file"""
         import json
@@ -195,7 +234,7 @@ class GP:
         # Predict future
         Nx = self.__Nx
         Ny = self.__Ny
-
+        
         dt = model.sampling_time()
         Nt = np.size(u, 0)
         sim_time = Nt * dt
@@ -207,8 +246,8 @@ class GP:
         covar = np.eye(Nx) * 1e-5 # Initial covar input matrix
         Q = np.eye(Ny)
         R= np.eye(Nx - Ny)
-
-
+        
+        
         for i in range(len(methods)):
             self.set_method(methods[i])
             mean_t = x0
@@ -255,9 +294,12 @@ class GP:
             ax.set_xlabel('Time')
         if title is not None:
             fig.canvas.set_window_title(title)
-        #else:
-            # fig.canvas.set_window_title(('Training data: {x},  Mean Function: {y},  '
-            #                              'Max Standarized Mean Squared Error: {z:.3g}'
-            #                             ).format(x=self.__N, y=self.__mean_func,
-            #                                     z=self.__SMSE))
+        else:
+            if self.__SMSE is None:
+                self.__SMSE = -1
+            fig.canvas.set_window_title(('Training data: {x},  Mean Function: {y},  '
+                                         'Normalize: {q}, '
+                                          'Max Standarized Mean Squared Error: {z:.3g}'
+                                         ).format(x=self.__N, y=self.__mean_func, q=self.__normalize,
+                                                 z=self.__SMSE))
         plt.show()

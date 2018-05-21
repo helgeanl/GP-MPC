@@ -40,7 +40,7 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
     sf2 = hyper[Nx]**2
     sn2 = hyper[Nx + 1]**2
 
-    m = get_mean_function(hyper, X, func=meanFunc)
+    m = get_mean_function(hyper, X.T, func=meanFunc)
 
     # Calculate covariance matrix
     K_s = ca.SX.sym('K_s',N, N)
@@ -70,7 +70,7 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
     Y_s = ca.SX.sym('Y', ca.MX.size(Y))
     L_s = ca.SX.sym('L', ca.Sparsity.lower(N))
     sol = ca.Function('sol', [L_s, Y_s], [ca.solve(L_s, Y_s)])
-    invLy = sol(L, Y - m(X))
+    invLy = sol(L, Y - m(X.T))
 
     invLy_s = ca.SX.sym('invLy', ca.MX.size(invLy))
     sol2 = ca.Function('sol2', [L_s, invLy_s], [ca.solve(L_s.T, invLy_s)])
@@ -79,7 +79,7 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
     alph = ca.SX.sym('alph', ca.MX.size(alpha))
     det = ca.SX.sym('det')
     NLL = ca.Function('NLL', [Y_s, alph, det], [0.5 * ca.mtimes(Y_s.T, alph) + 0.5 * det])
-    return NLL(Y - m(X), alpha, log_detK)
+    return NLL(Y - m(X.T), alpha, log_detK)
 
 
 def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
@@ -170,28 +170,28 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
         meanF     = np.mean(Y)
         lb        = np.zeros(num_hyp)
         ub        = np.zeros(num_hyp)
-        #ub[:]     = np.inf
-        lb[:Nx]    = stdX / 20
-        ub[:Nx]    = stdX * 20
-        lb[Nx]     = stdF / 20
-        ub[Nx]     = stdF * 20
+
+        lb[:Nx]    = stdX / 10
+        ub[:Nx]    = stdX * 10
+        lb[Nx]     = stdF / 10
+        ub[Nx]     = stdF * 10
         lb[Nx + 1] = 10**-5 / 10
         ub[Nx + 1] = 10**-5 * 10
-
-        if meanFunc is 'const':
-            lb[-1] = meanF / 5
-            ub[-1] = meanF * 5
-        elif meanFunc is not 'zero':
-            lb[-1] = meanF / 5
-            ub[-1] = meanF * 5
-            lb[-h_m:-1] = -np.inf
-            ub[-h_m:-1] = np.inf
-
+        
         if hyper_init is None:
             hyp_init = pyDOE.lhs(num_hyp, samples=1).flatten()
             hyp_init = hyp_init * (ub - lb) + lb
         else:
             hyp_init = hyper_init[output, :]
+        
+        if meanFunc is 'const':
+            lb[-1] = meanF / 10 - 1e-8
+            ub[-1] = meanF * 10 + 1e-8
+        elif meanFunc is not 'zero':
+            lb[-1] = meanF / 10 -1e-8
+            ub[-1] = meanF * 10 + 1e-8
+            lb[-h_m:-1] = -np.inf
+            ub[-h_m:-1] = np.inf  
 
         squaredist = np.zeros((N, N * Nx))
         for i in range(Nx):
@@ -206,10 +206,10 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
         for i in range(multistart):
             solve_time = -time.time()
             if warm_start:
-                res = res = Solver(x0=hyp_init, lam_x0=lam_x0[output],
+                res = Solver(x0=hyp_init, lam_x0=lam_x0[output],
                                    lbx=lb, ubx=ub, p=param)
             else:
-                res = res = Solver(x0=hyp_init, lbx=lb, ubx=ub, p=param)
+                res =  Solver(x0=hyp_init, lbx=lb, ubx=ub, p=param)
             status = Solver.stats()['return_status']
             obj[i]              = res['f']
             hyp_opt_loc[i, :]   = res['x']
@@ -240,8 +240,8 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
         invL = np.linalg.solve(L, np.eye(N))
         invK[output, :, :] = np.linalg.solve(L.T, invL)
         chol[output] = L
-        m = get_mean_function(ca.MX(hyp_opt[output, :]), X, func=meanFunc)
-        mean = np.array(m(X)).reshape((N,))
+        m = get_mean_function(ca.MX(hyp_opt[output, :]), X.T, func=meanFunc)
+        mean = np.array(m(X.T)).reshape((N,))
         alpha[output] = np.linalg.solve(L.T, np.linalg.solve(L, Y[:, output] - mean))
     print('----------------------------------------')
 
@@ -263,7 +263,7 @@ def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc, alpha=None):
 
     gp_func = ca.Function('gp', [z_s],
                                 gp(invK, ca.MX(X), ca.MX(Y), ca.MX(hyper),
-                                   z_s.T, meanFunc=meanFunc, alpha=alpha))
+                                   z_s, meanFunc=meanFunc, alpha=alpha))
     loss = 0
 
     for i in range(N):
