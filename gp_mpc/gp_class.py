@@ -19,11 +19,14 @@ from .optimize import train_gp, validate
 from .mpc_class import lqr
 
 class GP:
-    def __init__(self, X, Y, mean_func='zero', gp_method='TA',
-                 optimizer_opts=None):
+    def __init__(self, X, Y, mean_func="zero", gp_method="TA",
+                 optimizer_opts=None, hyper=None):
         """ Initialize and optimize GP model
 
         """
+
+        X = np.array(X)
+        Y = np.array(Y)
 
         self.__Ny = Y.shape[1]
         self.__Nx = X.shape[1]
@@ -35,16 +38,26 @@ class GP:
         self.__gp_method = gp_method
 
         """ Optimize hyperparameters """
-        opt = train_gp(self.__X, self.__Y, meanFunc=self.__mean_func,
-                       optimizer_opts=optimizer_opts)
-        self.__hyper = opt['hyper']
-        self.__invK  = opt['invK']
-        self.__alpha = opt['alpha']
-        self.__chol  = opt['chol']
-        self.__hyper_length_scales   = self.__hyper[:, :self.__Nx]
-        self.__hyper_signal_variance = self.__hyper[:, self.__Nx]**2
-        self.__hyper_noise_variance = self.__hyper[:, self.__Nx + 1]**2
-        self.__hyper_mean           = self.__hyper[:, (self.__Nx + 1):]
+        if hyper is None:
+            opt = train_gp(self.__X, self.__Y, meanFunc=self.__mean_func,
+                           optimizer_opts=optimizer_opts)
+            self.__hyper = opt['hyper']
+            self.__invK  = opt['invK']
+            self.__alpha = opt['alpha']
+            self.__chol  = opt['chol']
+            self.__hyper_length_scales   = self.__hyper[:, :self.__Nx]
+            self.__hyper_signal_variance = self.__hyper[:, self.__Nx]**2
+            self.__hyper_noise_variance = self.__hyper[:, self.__Nx + 1]**2
+            self.__hyper_mean           = self.__hyper[:, (self.__Nx + 1):]
+        else:
+            self.__hyper  = np.array(hyper['hyper'])
+            self.__invK   = np.array(hyper['invK'])
+            self.__alpha  = np.array(hyper['alpha'])
+            self.__chol   = np.array(hyper['chol'])
+            self.__hyper_length_scales   = np.array(hyper['length_scale'])
+            self.__hyper_signal_variance = np.array(hyper['signal_var'])
+            self.__hyper_noise_variance  = np.array(hyper['noise_var'])
+            self.__hyper_mean = np.array(hyper['mean']) 
 
         # Build GP
         self.__mean, self.__covar, self.__mean_jac = build_gp(self.__invK, self.__X,
@@ -61,8 +74,6 @@ class GP:
 
     def gp_TA_test(self, z, covar):
         return self.__mean(z), self.__TA_covar(z, covar)
-
-
 
 
     def validate(self, X_test, Y_test):
@@ -141,7 +152,42 @@ class GP:
             M: Reduce the model size from N to M.
         """
 
+    def __to_dict(self):
+        """ Store model data in a struct """
+        gp_dict = {}    
+        gp_dict['X'] = self.__X.tolist()
+        gp_dict['Y'] = self.__Y.tolist()
+        gp_dict['hyper'] = dict(
+                    hyper = self.__hyper.tolist(),
+                    invK = self.__invK.tolist(),
+                    alpha = self.__alpha.tolist(),
+                    chol = self.__chol.tolist(),
+                    length_scale = self.__hyper_length_scales.tolist(),
+                    signal_var = self.__hyper_signal_variance.tolist(), 
+                    noise_var = self.__hyper_noise_variance.tolist(), 
+                    mean = self.__hyper_mean.tolist()
+                )        
+        gp_dict['mean_func'] = self.__mean_func
+        return gp_dict
 
+    
+    def save_model(self, output_filename):
+        """ Save model to file"""
+        import json
+        output_dict = self.__to_dict()
+        with open(output_filename + ".json", "w") as outfile:
+            json.dump(output_dict, outfile)
+
+
+    @classmethod
+    def load_model(cls, filename):
+        """ Create a new model from file"""
+        import json
+        with open(filename + ".json") as json_data:
+            input_dict = json.load(json_data)
+        return cls(**input_dict)
+        
+    
     def predict_compare(self, x0, u, model, num_cols=2, xnames=None,
                         title=None, feedback=False):
         """ Predict and compare all GP methods

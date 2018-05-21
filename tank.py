@@ -85,9 +85,12 @@ X, Y           = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 X_test, Y_test = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 
 # Create GP model
-gp = GP(X, Y)
+gp = GP(X, Y, mean_func=meanFunc)
 gp.validate(X_test, Y_test)
 
+gp.save_model('test_model')
+gp2 = GP.load_model('test_model')
+gp2.validate(X_test, Y_test)
 x0 = np.array([8., 10., 8., 18.])
 u0 = np.array([45, 34])
 u_test = np.full((50, 2), [35, 56]) 
@@ -113,17 +116,17 @@ P = np.array([[5, 0, 0, 0],
 R = np.diag([.0, .0])
 S = np.diag([.01, .01]) 
 
-mpc = MPC(horizon=5*dt, gp=gp, model=model,
-          gp_method='TA',
-          ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S,
-          terminal_constraint=None, costFunc='quad', feedback=False, 
-          solver_opts=solver_opts, discrete_method='gp',
-          inequality_constraints=None
-          )
-
-
-x, u = mpc.solve(x0, u0=u0,sim_time=10*dt, x_sp=x_sp, debug=False, noise=False)
-mpc.plot()
+#mpc = MPC(horizon=5*dt, gp=gp, model=model,
+#          gp_method='TA',
+#          ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S,
+#          terminal_constraint=None, costFunc='quad', feedback=False, 
+#          solver_opts=solver_opts, discrete_method='gp',
+#          inequality_constraints=None
+#          )
+#
+#
+#x, u = mpc.solve(x0, u0=u0,sim_time=10*dt, x_sp=x_sp, debug=False, noise=False)
+#mpc.plot()
 
 A, B = model.discrete_rk4_linearize(x0, u0)
 K, S, E = lqr(A, B, Q, R)
