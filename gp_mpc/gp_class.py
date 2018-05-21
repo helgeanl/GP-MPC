@@ -47,14 +47,14 @@ class GP:
         self.__hyper_mean           = self.__hyper[:, (self.__Nx + 1):]
 
         # Build GP
-        self.__mean, self.__covar, self.__mean_jac = build_gp(self.__invK, self.__X, 
+        self.__mean, self.__covar, self.__mean_jac = build_gp(self.__invK, self.__X,
                                                      self.__hyper, self.__alpha, self.__chol)
         self.__TA_covar = build_TA_cov(self.__mean, self.__covar,
                                        self.__mean_jac, self.__Nx, self.__Ny)
-        
+
         self.set_method(gp_method)
-        
-        
+
+
     def gp_test(self, z):
         return self.__mean(z), self.__covar(z)
 
@@ -69,7 +69,7 @@ class GP:
         """ Validate GP model with test data """
         SMSE = validate(X_test, Y_test, self.__X, self.__Y, self.__invK,
                  self.__hyper, self.__mean_func)
-        self._SMSE = np.max(SMSE)
+        self.__SMSE = np.max(SMSE)
 
 
     def set_method(self, gp_method='TA'):
@@ -125,7 +125,7 @@ class GP:
         Bd = np.array(self.__discrete_jac_u(x0, u0, cov0))
         return Ad, Bd
 
-            
+
     def noise_variance(self):
         """ Get the noise variance
         """
@@ -142,7 +142,7 @@ class GP:
         """
 
 
-    def predict_compare(self, x0, u, model, num_cols=2, xnames=None, 
+    def predict_compare(self, x0, u, model, num_cols=2, xnames=None,
                         title=None, feedback=False):
         """ Predict and compare all GP methods
         """
@@ -185,7 +185,8 @@ class GP:
         t = np.linspace(0.0, sim_time, Nt + 1)
         Y_sim = model.sim(x0, u)
         Y_sim = np.vstack([x0, Y_sim])
-
+        if np.any(var < 0):
+            var = var.clip(min=0)
 
         num_rows = int(np.ceil(Ny / num_cols))
         if xnames is None:
@@ -208,9 +209,9 @@ class GP:
             ax.set_xlabel('Time')
         if title is not None:
             fig.canvas.set_window_title(title)
-        else:
-            fig.canvas.set_window_title(('Training data: {x},  Mean Function: {y},  '
-                                         'Max Standarized Mean Squared Error: {z:.3g}'
-                                        ).format(x=self.__N, y=self.__mean_func,
-                                                z=self._SMSE))
+        #else:
+            # fig.canvas.set_window_title(('Training data: {x},  Mean Function: {y},  '
+            #                              'Max Standarized Mean Squared Error: {z:.3g}'
+            #                             ).format(x=self.__N, y=self.__mean_func,
+            #                                     z=self.__SMSE))
         plt.show()
