@@ -17,46 +17,39 @@ from .mpc_class import lqr
 
 class GP:
     def __init__(self, X, Y, mean_func="zero", gp_method="TA",
-                 optimizer_opts=None, hyper=None, normalize=True, lb=None, ub=None):
+                 optimizer_opts=None, hyper=None, normalize=True, 
+                 xlb=None, xub=None, ulb=None, uub=None, meta=None):
         """ Initialize and optimize GP model
 
         """
 
         X = np.array(X).copy()
         Y = np.array(Y).copy()
-        
+        self.__X = X
+        self.__Y = Y
         self.__Ny = Y.shape[1]
         self.__Nx = X.shape[1]
         self.__N = X.shape[0]
         self.__Nu = self.__Nx - self.__Ny
         
-        self.__meanY = np.mean(Y, 0)
-        self.__stdY = np.std(Y, 0)
-        
-        self.__X = X
-        if normalize:
-            self.__Y = self.standardize(Y)
-            self.__X[:, :self.__Ny] = self.standardize(X[:, :self.__Ny])
-        else:
-            self.__Y = Y
-        
-        
+        self.__gp_method = gp_method
         self.__mean_func = mean_func
         self.__normalize = normalize
-        self.__gp_method = gp_method
-
+        
+        if meta is not None:
+            self.__meanY = np.array(meta['meanY'])
+            self.__stdY  = np.array(meta['stdY'])
+            self.__meanZ= np.array(meta['meanZ'])
+            self.__stdZ = np.array(meta['stdZ'])
+            self.__meanX = np.array(meta['meanX'])
+            self.__stdX = np.array(meta['stdX'])
+            self.__meanU = np.array(meta['meanU'])
+            self.__stdU  = np.array(meta['stdU'])
+        
         """ Optimize hyperparameters """
         if hyper is None:
-            opt = train_gp(self.__X, self.__Y, meanFunc=self.__mean_func,
-                           optimizer_opts=optimizer_opts)
-            self.__hyper = opt['hyper']
-            self.__invK  = opt['invK']
-            self.__alpha = opt['alpha']
-            self.__chol  = opt['chol']
-            self.__hyper_length_scales   = self.__hyper[:, :self.__Nx]
-            self.__hyper_signal_variance = self.__hyper[:, self.__Nx]**2
-            self.__hyper_noise_variance = self.__hyper[:, self.__Nx + 1]**2
-            self.__hyper_mean           = self.__hyper[:, (self.__Nx + 1):]
+            self.optimize(X=X, Y=Y, opts=optimizer_opts, mean_func=mean_func, normalize=normalize,
+                          xlb=xlb, xub=xub, ulb=ulb, uub=uub)
         else:
             self.__hyper  = np.array(hyper['hyper'])
             self.__invK   = np.array(hyper['invK'])
@@ -76,13 +69,64 @@ class GP:
         self.set_method(gp_method)
 
 
+    def optimize(self, X=None, Y=None, opts=None, mean_func='zero', normalize=True,
+                 xlb=None, xub=None, ulb=None, uub=None):
+        self.__mean_func = mean_func
+        self.__normalize = normalize
+        
+        if normalize:
+            self.__xlb = np.array(xlb)
+            self.__xub = np.array(xub)
+            self.__ulb = np.array(ulb)
+            self.__uub = np.array(uub)
+            self.__lb = np.hstack([xlb, ulb])
+            self.__ub = np.hstack([xub, uub])
+            self.__meanY = np.mean(Y, 0)
+            self.__stdY  = np.std(Y, 0)
+            self.__meanZ = np.mean(X, 0)
+            self.__stdZ  = np.std(X, 0)
+            self.__meanX = np.mean(X[:, :self.__Ny], 0)
+            self.__stdX  = np.std(X[:, :self.__Ny], 0)
+            self.__meanU = np.mean(X[:, self.__Ny:], 0)
+            self.__stdU  = np.std(X[:, self.__Ny:], 0)
+
+        
+        if X is not None:
+            X = np.array(X).copy()
+            self.__X = X.copy()
+        else:
+            X = self.__X.copy()
+        if Y is not None:
+            Y = np.array(Y).copy()
+            self.__Y = Y.copy()
+        else:
+            Y = self.__Y.copy()
+
+        if normalize:
+            self.__Y = self.standardize(Y, self.__meanY, self.__stdY)
+#            self.__X = self.normalize(self.__X, self.__lb, self.__ub)
+            self.__X = self.standardize(X, self.__meanZ, self.__stdZ)
+            
+        opt = train_gp(self.__X, self.__Y, meanFunc=self.__mean_func,
+                           optimizer_opts=opts)
+        self.__hyper = opt['hyper']
+        self.__invK  = opt['invK']
+        self.__alpha = opt['alpha']
+        self.__chol  = opt['chol']
+        self.__hyper_length_scales   = self.__hyper[:, :self.__Nx]
+        self.__hyper_signal_variance = self.__hyper[:, self.__Nx]**2
+        self.__hyper_noise_variance  = self.__hyper[:, self.__Nx + 1]**2
+        self.__hyper_mean            = self.__hyper[:, (self.__Nx + 1):]
+
+
     def validate(self, X_test, Y_test):
         """ Validate GP model with test data """
         Y_test = Y_test.copy()
         X_test = X_test.copy()
         if self.__normalize:
-            Y_test = self.standardize(Y_test)
-            X_test[:, :self.__Ny] = self.standardize(X_test[:, :self.__Ny])
+            Y_test = self.standardize(Y_test, self.__meanY, self.__stdY)
+#            X_test = self.normalize(X_test, self.__lb, self.__ub)
+            X_test = self.standardize(X_test, self.__meanZ, self.__stdZ)
         SMSE = validate(X_test, Y_test, self.__X, self.__Y, self.__invK,
                         self.__hyper, self.__mean_func)
         self.__SMSE = np.max(SMSE)
@@ -131,33 +175,30 @@ class GP:
 
     def predict(self, x, u, cov):
         if self.__normalize:
-            x_s = self.standardize(x)
+            x_s = self.standardize(x, self.__meanX, self.__stdX)
+            u_s = self.standardize(u, self.__meanU, self.__stdU)
+#            x_s = self.normalize(x, self.__xlb, self.__xub)
+#            u_s = self.normalize(u, self.__ulb, self.__uub)
         else:
             x_s = x
-        mean, cov = self.__predict(x_s, u, cov)
+            u_s = u
+        mean, cov = self.__predict(x_s, u_s, cov)
         if self.__normalize:
-            mean = self.inverse_mean(mean)
-            cov = self.inverse_covariance(cov)
+            mean = self.inverse_mean(mean, self.__meanY, self.__stdY)
+            cov = self.inverse_covariance(cov, self.__stdY)
         return mean, cov
 
 
-    def standardize(self, Y):
-        
-        return (Y - self.__meanY) / self.__stdY
-    
-    def standardizeX(self, X):
-        return (X - self.__meanX) / self.__stdX
-    
-    def standardize_x(self, X):
-        return (X - self.__meanX[:self.__Ny]) / self.__stdX[:self.__Ny]
-    
-    def standardize_u(self, X):
-        return (X - self.__meanX[self.__Ny:]) / self.__stdX[self.__Ny:]
-    
-    def inverse_mean(self, Y):     
-        return (Y * self.__stdY) + self.__meanY
-    
-    def inverse_covariance(self, covariance):
+    def standardize(self, Y, mean, std):
+        return (Y - mean) / std
+
+    def normalize(self, u, lb, ub):
+        return (u - lb) / (ub - lb)
+
+    def inverse_mean(self, x, mean, std):     
+        return (x * std) + mean
+
+    def inverse_covariance(self, covariance, std):
 #        return (covariance[..., np.newaxis] * self.__stdY**2)
         return covariance #* self.__stdY**2
 
@@ -179,6 +220,7 @@ class GP:
         """ Get the noise variance
         """
         return self.__hyper_noise_variance
+
 
 #TODO: Fix this
     def sparse(self, M):
@@ -207,6 +249,21 @@ class GP:
                 )        
         gp_dict['mean_func'] = self.__mean_func
         gp_dict['normalize'] = self.__normalize
+        if self.__normalize:
+            gp_dict['xlb'] = self.__xlb.tolist()
+            gp_dict['xub'] = self.__xub.tolist()
+            gp_dict['ulb'] = self.__ulb.tolist()
+            gp_dict['uub'] = self.__uub.tolist()
+            gp_dict['meta'] = dict(
+                        meanY = self.__meanY.tolist(), 
+                        stdY = self.__stdY.tolist(),  
+                        meanZ = self.__meanZ.tolist(),
+                        stdZ = self.__stdZ.tolist(), 
+                        meanX = self.__meanX.tolist(), 
+                        stdX = self.__stdX.tolist(), 
+                        meanU = self.__meanU.tolist(), 
+                        stdU = self.__stdU.tolist()  
+                )
         return gp_dict
 
 
@@ -295,11 +352,7 @@ class GP:
         if title is not None:
             fig.canvas.set_window_title(title)
         else:
-            if self.__SMSE is None:
-                self.__SMSE = -1
             fig.canvas.set_window_title(('Training data: {x},  Mean Function: {y},  '
                                          'Normalize: {q}, '
-                                          'Max Standarized Mean Squared Error: {z:.3g}'
-                                         ).format(x=self.__N, y=self.__mean_func, q=self.__normalize,
-                                                 z=self.__SMSE))
+                                         ).format(x=self.__N, y=self.__mean_func, q=self.__normalize))
         plt.show()

@@ -32,7 +32,7 @@ def get_mean_function(hyper, X, func='zero'):
     X_s = ca.SX.sym('x', Nx, N)
     Z_s = ca.MX.sym('x', Nx, N)
     m = ca.SX(N, 1)
-    hyp_s = ca.SX.sym('hyper', hyper.shape)
+    hyp_s = ca.SX.sym('hyper', *hyper.shape)
     if func == 'zero':
         meanF = ca.Function('zero_mean', [X_s, hyp_s], [m])
     elif func == 'const':

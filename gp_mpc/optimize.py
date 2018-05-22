@@ -20,7 +20,7 @@ from .gp_functions import get_mean_function, gp, gp_exact_moment
 # -----------------------------------------------------------------------------
 # Optimization of hyperperameters as a constrained minimization problem
 # -----------------------------------------------------------------------------
-def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
+def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero', prior=None):
     """ Objective function
 
     Calculate the negative log likelihood function using Casadi SX symbols.
@@ -77,9 +77,24 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
     alpha = sol2(L, invLy)
 
     alph = ca.SX.sym('alph', ca.MX.size(alpha))
-    det = ca.SX.sym('det')
-    NLL = ca.Function('NLL', [Y_s, alph, det], [0.5 * ca.mtimes(Y_s.T, alph) + 0.5 * det])
-    return NLL(Y - m(X.T), alpha, log_detK)
+    detK = ca.SX.sym('det')
+    
+    # Calculate hyperpriors
+    theta = ca.SX.sym('theta')
+    mu = ca.SX.sym('mu')
+    s2 = ca.SX.sym('s2')
+    prior_gauss = ca.Function('hyp_prior', [theta, mu, s2], 
+                              [-(theta - mu)**2/(2*s2) - 0.5*ca.log(2*ca.pi*s2)])
+    log_prior = 0
+    if prior is not None:
+        for i in range(Nx):
+            log_prior += prior_gauss(ell[i], prior['ell_mean'], prior['ell_std']**2)
+        log_prior += prior_gauss(sf2, prior['sf_mean'], prior['sf_std']**2)
+        log_prior += prior_gauss(sn2, prior['sn_mean'], prior['sn_std']**2)
+    
+    NLL = ca.Function('NLL', [Y_s, alph, detK], 
+                      [0.5 * ca.mtimes(Y_s.T, alph) + 0.5 * detK])
+    return NLL(Y - m(X.T), alpha, log_detK) + log_prior
 
 
 def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
@@ -126,6 +141,15 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     h_sf    = 1     # Standard deviation function
     h_sn    = 1     # Standard deviation noise
     num_hyp = h_ell + h_sf + h_sn + h_m
+    prior = None
+#    prior = dict(
+#                ell_mean = 10,
+#                ell_std = 10,
+#                sf_mean  = 10,
+#                sf_std  = 10,
+#                sn_mean  = 1e-5,
+#                sn_std  = 1e-5
+#            )
 
     # Create solver
     Y_s          = ca.MX.sym('Y', N)
@@ -133,10 +157,10 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     hyp_s        = ca.MX.sym('hyp', 1, num_hyp)
     squaredist_s = ca.MX.sym('sqdist', N, N * Nx)
     param_s      = ca.horzcat(squaredist_s, Y_s)
-
+    
     NLL_func = ca.Function('NLL', [hyp_s, X_s, Y_s, squaredist_s],
                            [calc_NLL(hyp_s, X_s, Y_s, squaredist_s,
-                                     meanFunc=meanFunc)])
+                                     meanFunc=meanFunc, prior=prior)])
     nlp = {'x': hyp_s, 'f': NLL_func(hyp_s, X, Y_s, squaredist_s), 'p': param_s}
 
     # NLP solver options
@@ -145,7 +169,8 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     opts['print_time']          = False
     opts['verbose']             = False
     opts['ipopt.print_level']   = 1
-    opts["ipopt.tol"]          = 1e-8
+    opts['ipopt.tol']          = 1e-8
+    opts['ipopt.mu_strategy'] = 'adaptive'
     if optimizer_opts is not None:
         opts.update(optimizer_opts)
 
@@ -165,22 +190,39 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     print('# Optimizing hyperparameters (N=%d)' % N )
     print('----------------------------------------')
     for output in range(Ny):
-        stdX      = np.std(X)
-        stdF      = np.std(Y[:, output])
         meanF     = np.mean(Y)
-        lb        = np.zeros(num_hyp)
-        ub        = np.zeros(num_hyp)
-
-        lb[:Nx]    = stdX / 10
-        ub[:Nx]    = stdX * 10
-        lb[Nx]     = stdF / 10
-        ub[Nx]     = stdF * 10
-        lb[Nx + 1] = 10**-5 / 10
-        ub[Nx + 1] = 10**-5 * 10
+        lb        = -np.inf * np.ones(num_hyp)
+        ub        = np.inf * np.ones(num_hyp)
+#        
+        lb[:Nx]    = 1e-2
+        ub[:Nx]    = 1e2
+        lb[Nx]     = 1e-8
+        ub[Nx]     = 1e2
+        lb[Nx + 1] = 10**-6
+        ub[Nx + 1] = 10**-4
         
+#        lb[:Nx]    = np.sqrt(10**(-3))
+#        ub[:Nx]    = np.sqrt(10**(3))
+#        lb[Nx]     = stdF / 5.
+#        ub[Nx]     = stdF * 5.
+#        lb[Nx + 1] = 10**-6
+#        ub[Nx + 1] = 10**-4
+#        
+        
+#        lb[:Nx]    = np.sqrt(10**(-3)) #stdX / 10
+#        ub[:Nx]    = np.sqrt(10**(3)) #stdX * 10
+#        lb[Nx]     = np.sqrt(10**(-3)) #stdF / 10
+#        ub[Nx]     = np.sqrt(10**(3)) #stdF * 10
+#        lb[Nx + 1] = 10**-6
+#        ub[Nx + 1] = 10**-4
+
         if hyper_init is None:
-            hyp_init = pyDOE.lhs(num_hyp, samples=1).flatten()
-            hyp_init = hyp_init * (ub - lb) + lb
+#            hyp_init = pyDOE.lhs(num_hyp, samples=1).flatten()
+            hyp_init = np.zeros((num_hyp))
+            hyp_init[:Nx] = 10
+            hyp_init[Nx] = 1
+            hyp_init[Nx + 1] = 1e-5
+#            hyp_init = hyp_init * (ub - lb) + lb
         else:
             hyp_init = hyper_init[output, :]
         
@@ -271,8 +313,6 @@ def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc, alpha=None):
         loss += (Y_test[i, :] - y)**2
     loss = loss / N
     standardized_loss = loss/ np.std(Y_test, 0)
-
-    
         
     #TODO: Add negative log porability 
     

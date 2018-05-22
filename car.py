@@ -67,9 +67,9 @@ def ode(x, u, z, p):
                     + 2*Cr*(x[1] - lf*x[2]) / (x[0] + eps)),
                 1/Iz * (2*lf*mu*Fzf*u[0]*u[1] + 2*lf*Cf*(x[1] + lf*x[2]) / (x[0] + eps)
                     - 2*lf*Cf*u[1] - 2*lr*Cr*(x[1] - lf*x[2]) / (x[0] + eps)),
-#                x[2],
-#                x[0]*ca.cos(x[3]) - x[1]*ca.sin(x[3]),
-#                x[0]*ca.sin(x[3]) + x[1]*ca.cos(x[3])
+                x[2],
+                x[0]*ca.cos(x[3]) - x[1]*ca.sin(x[3]),
+                x[0]*ca.sin(x[3]) + x[1]*ca.cos(x[3])
             ]
     return  ca.vertcat(*dxdt)
 
@@ -124,16 +124,16 @@ def inequality_constraints(x, covar, u, eps, par):
     con_ineq_lb.append(-road_bound)
 
     """ Obstacle avoidance """
-#    Xcg_s = ca.SX.sym('Xcg')
-#    Ycg_s = ca.SX.sym('Ycg')
-#    obs_s = ca.SX.sym('obs', 4)
-#    ellipse = ca.Function('ellipse', [Xcg_s, Ycg_s, obs_s],
-#                          [ ((Xcg_s - obs_s[0]) / (obs_s[2] + car_length))**2
-#                           + ((Ycg_s - obs_s[1]) / (obs_s[3] + car_width))**2] )
-#    con_ineq.append(1 - ellipse(x[4], x[5], par) + eps)
-#    
-#    con_ineq_ub.append(0)
-#    con_ineq_lb.append(-np.inf)
+    Xcg_s = ca.SX.sym('Xcg')
+    Ycg_s = ca.SX.sym('Ycg')
+    obs_s = ca.SX.sym('obs', 4)
+    ellipse = ca.Function('ellipse', [Xcg_s, Ycg_s, obs_s],
+                          [ ((Xcg_s - obs_s[0]) / (obs_s[2] + car_length))**2
+                           + ((Ycg_s - obs_s[1]) / (obs_s[3] + car_width))**2] )
+    con_ineq.append(1 - ellipse(x[4], x[5], par) + eps)
+    
+    con_ineq_ub.append(0)
+    con_ineq_lb.append(-np.inf)
 
     cons = dict(con_ineq=con_ineq,
                 con_ineq_lb=con_ineq_lb,
@@ -145,54 +145,54 @@ def inequality_constraints(x, covar, u, eps, par):
 
 solver_opts = {}
 solver_opts['ipopt.linear_solver'] = 'ma27'
-#solver_opts['ipopt.max_cpu_time'] = 10
+solver_opts['ipopt.max_cpu_time'] = 10
 #solver_opts['ipopt.max_iter'] = 75
-solver_opts['expand']= True
+solver_opts['expand']= False
 
-meanFunc = 'zero'
+
 dt = 0.05
-Nx = 3
+Nx = 6
 Nu = 2
-R = np.eye(Nx) * 1e-5
+R_n = np.eye(Nx) * 1e-5
 
 # Limits in the training data
-ulb = [-.8, -.05]
-uub = [.8, .05]
-#xlb = [10.0, -.8, -.5, -.5, .0,  -1.]
-xlb = [10.0, -.8, -.3]
-#xub = [30.0, .8, .5, .5, 10, 1]
-xub = [30.0, .8, .3]
+ulb = [-.5, -.034]
+uub = [.5, .034]
+xlb = [10.0, -.8, -.5, -.5, .0,  -1.]
+#xlb = [10.0, -.5, -.15]
+xub = [30.0, .8, .5, .5, 10, 1]
+#xub = [30.0, .5, .15]
 
 N = 50 # Number of training data
 
 # Create simulation model
-model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R)
+model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R_n)
 X, Y           = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 X_test, Y_test = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 
-## Create GP model
-gp = GP(X, Y, gp_method='TA', normalize=True, mean_func=meanFunc)
-gp.save_model('gp_car')
-#gp = GP.load_model('gp_car')
-gp.validate(X_test, Y_test)
 
 
 # Test data
-#x0 = np.array([13.89, 0.0, 0.0, 0.0,.0 , 0.0])
-x0 = np.array([13.89, 0.0, 0.0])
+x0 = np.array([13.89, 0.0, 0.0, 0.0,.0 , 0.0])
+#x0 = np.array([13.89, 0.0, 0.0])
 u0 = [0.0, 0.0]
 cov0 = np.eye(Nx+Nu)
 u_test = np.zeros((20, 2))
 
-gp.predict_compare(x0, u_test, model)
+## Create GP model
+#gp = GP(X, Y, xlb=xlb, xub=xub, ulb=ulb, uub=uub, optimizer_opts=solver_opts, normalize=False)
+#gp.save_model('gp_car')
+#gp = GP.load_model('gp_car')
+#gp.validate(X_test, Y_test)
+#gp.predict_compare(x0, u_test, model)
 
 
 # Limits in the MPC problem
-#ulb = [-.5, -.034]
-#uub = [.5, .034]
-#xlb = [10.0, -.5, -.15, -.3, .0, -np.inf]
-#xub = [30.0, .5, .15, .3, np.inf, np.inf]
-#x_sp = np.array([5.8, 0., 0., 0., 20., 0. ])
+ulb = [-.5, -.034]
+uub = [.5, .034]
+xlb = [10.0, -.5, -.15, -.3, .0, -np.inf]
+xub = [30.0, .5, .15, .3, np.inf, np.inf]
+x_sp = np.array([13.89, 0., 0., 0., 0., 0. ])
 
 # Constraint parameters
 slip_min = -4.0 * np.pi / 180
@@ -203,8 +203,8 @@ car_length = 10.0
 obs = np.array([[40, .3, 1., 0.2],
                [80, -0.5, 1., .2],
                [150, 0., 1., .2]])
-#obs_length = 10.
-#obs_width = 1.
+
+
 
 # Penalty values
 P = np.diag([.0, 50., 10, .1, 0, 10])
@@ -214,27 +214,23 @@ R = np.diag([.1, .1])
 S = np.diag([1, 10])
 lam = 10
 
-#
-#A, B = model.discrete_linearize(x0, u0)
-#K, S, E = lqr(A, B, Q, R)
-#eig = plot_eig(A - B @ K)
- 
 
-#mpc = MPC(horizon=2*dt, gp=gp, model=model,
-#          discrete_method='gp', gp_method='TA', 
-#          ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
-#          terminal_constraint=None, costFunc='quad', feedback=True,
-#          solver_opts=solver_opts, 
-#          inequality_constraints=inequality_constraints, num_con_par=4
-#          )
-#
-#
-#x, u = mpc.solve(x0, sim_time=3*dt, x_sp=x_sp, debug=False, noise=False,
-#                 con_par_func=constraint_parameters)
-#mpc.plot()
-#plot_car(x[:, 4], x[:, 5])
+mpc = MPC(horizon=20*dt, model=model,
+          discrete_method='rk4',
+          ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
+          terminal_constraint=None, costFunc='quad', feedback=False,
+          solver_opts=solver_opts, 
+          inequality_constraints=inequality_constraints, num_con_par=4
+          )
+
+
+x, u = mpc.solve(x0, sim_time=300*dt, x_sp=x_sp, debug=False, noise=False,
+                 con_par_func=constraint_parameters)
+mpc.plot()
+plot_car(x[:, 4], x[:, 5])
 #u1 = u[:20,:]
-##model.predict_compare(x[0], u1)
+#model.predict_compare(x[0], u1)
+
 ## Use previous data to train GP
 #X = x[:-1,:]
 #Y = x[1:,:]
@@ -243,9 +239,24 @@ lam = 10
 #Y1 = Y[ :50,:]
 #Z2 = Z[50:-1,:]
 #Y2 = Y[ 50:-1,:]
-#
-#z = np.hstack([x0,u0])
 
-#gp = GP(Z1, Y1)
-#gp.validate(Z2, Y2)
-#gp.predict_compare(x0, u[:10,:], model)
+
+## Create GP model
+#gp = GP(X, Y, ulb=ulb, uub=uub, optimizer_opts=solver_opts, normalize=False)
+#gp.save_model('gp_car')
+#gp = GP.load_model('gp_car')
+#gp.validate(X_test, Y_test)
+#gp.predict_compare(x0, u_test, model)
+
+#mpc_gp = MPC(horizon=2*dt, gp=gp, model=model,
+#          discrete_method='gp', gp_method='TA', 
+#          ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
+#          terminal_constraint=None, costFunc='quad', feedback=False,
+#          solver_opts=solver_opts, 
+#          inequality_constraints=inequality_constraints, num_con_par=4
+#          )
+#
+#
+#x, u = mpc_gp.solve(x0, sim_time=3*dt, x_sp=x_sp, debug=False, noise=False,
+#                 con_par_func=constraint_parameters)
+

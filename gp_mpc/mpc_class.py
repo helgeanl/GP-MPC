@@ -17,7 +17,7 @@ import scipy.linalg
 
 
 class MPC:
-    def __init__(self, horizon, gp, model,
+    def __init__(self, horizon, model, gp=None,
                  Q=None, P=None, R=None, S=None, lam=None,
                  ulb=None, uub=None, xlb=None, xub=None, terminal_constraint=None,
                  feedback=True, gp_method='TA', costFunc='quad', solver_opts=None,
@@ -28,10 +28,10 @@ class MPC:
 
         # Arguments:
             horizon: Prediction horizon with control inputs
-            gp: GP model
             model: System model
 
         # Optional Argumants:
+            gp: GP model
             Q: State penalty matrix
             P: Termial penalty matrix
             R: Input penalty matrix
@@ -143,7 +143,10 @@ class MPC:
             raise NameError("Can't use exact discrete system with expanded graph")
 
         # Initialize state variance with the GP noise variance
-        self.__variance_0 = gp.noise_variance()
+        if gp is not None:
+            self.__variance_0 = gp.noise_variance()
+        else:
+            self.__variance_0 = np.zeros((Ny)) + 1e-8
 
         # Define which cost function to use
         self.__set_cost_function(costFunc, mean_ref_s)
@@ -178,7 +181,7 @@ class MPC:
         """ Adjust hard boundries """
         for t in range(Nt):
             for i in range(Ny):
-                self.__varlb['covariance', t] = 1e-9*np.eye(Ny).flatten()
+                self.__varlb['covariance', t] = 0*np.eye(Ny).flatten()
             self.__varlb['eps', t] = 0
             if xub is not None:
                 self.__varub['mean', t] = xub
@@ -304,6 +307,7 @@ class MPC:
             'ipopt.warm_start_slack_bound_frac' : 1e-9,
             'ipopt.warm_start_slack_bound_push' : 1e-9,
             'ipopt.warm_start_mult_bound_push' : 1e-9,
+#            'ipopt.mu_strategy' : 'adaptive',
             'print_time' : False,
             'verbose' : False,
             'expand' : True
@@ -366,7 +370,7 @@ class MPC:
         # Initialize variables
         self.__mean          = np.full((self.__Nsim + 1, Ny), x0)
         self.__mean_pred     = np.full((self.__Nsim + 1, Ny), x0)
-        self.__covariance    = np.ones((self.__Nsim + 1, Ny, Ny)) * 1e-5
+        self.__covariance    = np.full((self.__Nsim + 1, Ny, Ny), np.eye(Ny)* 1e-6)
         self.__u             = np.full((self.__Nsim, Nu), u0)
 
         self.__mean[0]       = x0
@@ -400,8 +404,7 @@ class MPC:
 
             """ Initial values """
             self.__var_init['mean', 0]  = self.__mean[t]
-            self.__varlb['mean', 0]     = self.__mean[t]
-            self.__varub['mean', 0]     = self.__mean[t]
+
             if con_par_func is not None:
                 con_par = con_par_func(self.__mean[t, :])
             else:
@@ -670,7 +673,12 @@ class MPC:
         if title is not None:
             fig_x.canvas.set_window_title(title)
         else:
-            fig_x.canvas.set_window_title('MPC Horizon: %d, Feedback: %s' % (self.__Nt, self.__feedback))
+            fig_x.canvas.set_window_title(('MPC Horizon: {x}, Feedback: {y}, '
+                                           'Discretization: {z}'
+                                           ).format( x=self.__Nt,
+                                                     y=self.__feedback,
+                                                     z=self.__discrete_method
+                                           ))
         plt.show()
         return fig_x, fig_u
 
