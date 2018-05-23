@@ -185,7 +185,7 @@ class GP:
         mean, cov = self.__predict(x_s, u_s, cov)
         if self.__normalize:
             mean = self.inverse_mean(mean, self.__meanY, self.__stdY)
-            cov = self.inverse_covariance(cov, self.__stdY)
+#            cov = self.inverse_covariance(cov, self.__stdY)
         return mean, cov
 
 
@@ -198,9 +198,9 @@ class GP:
     def inverse_mean(self, x, mean, std):     
         return (x * std) + mean
 
-    def inverse_covariance(self, covariance, std):
+    def inverse_variance(self, variance):
 #        return (covariance[..., np.newaxis] * self.__stdY**2)
-        return covariance #* self.__stdY**2
+        return variance * self.__stdY**2
 
 
     def discrete_linearize(self, x0, u0, cov0):

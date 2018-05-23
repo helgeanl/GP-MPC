@@ -114,7 +114,7 @@ class MPC:
             ulb = np.full((Nu), -np.inf)
             
       
-        eps_sqrt = 1e-5
+        eps_sqrt =0
         #TODO: Clean this up
         percentile = 0.95
         quantile_x = np.ones(Ny) * norm.ppf(percentile)
@@ -146,7 +146,8 @@ class MPC:
         if gp is not None:
             self.__variance_0 = gp.noise_variance()
         else:
-            self.__variance_0 = np.zeros((Ny)) + 1e-8
+            self.__variance_0 = np.full((Ny), 0)
+            print('var_0')
 
         # Define which cost function to use
         self.__set_cost_function(costFunc, mean_ref_s)
@@ -157,7 +158,7 @@ class MPC:
         v_s = ca.MX.sym('v', Nu)
         if feedback:
             u_func = ca.Function('u', [mean_s, v_s, K_s],
-                                 [v_s - ca.mtimes(K_s.reshape((Nu, Ny)), mean_s)])
+                                 [v_s + ca.mtimes(K_s.reshape((Nu, Ny)), mean_s)])
         else:
             u_func = ca.Function('u', [mean_s, v_s, K_s], [v_s])
         self.__u_func = u_func
@@ -168,7 +169,7 @@ class MPC:
                 ctools.entry('mean', shape=(Ny,), repeat=Nt + 1),
                 ctools.entry('covariance', shape=(Ny * Ny,), repeat=Nt + 1),
                 ctools.entry('v', shape=(Nu,), repeat=Nt),
-                ctools.entry('sparse', shape=(Ny * Ny,), repeat=Nt + 1),
+#                ctools.entry('sparse', shape=(Ny * Ny,), repeat=Nt + 1),
                 ctools.entry('eps', repeat=Nt),
         )])
         self.__var = var
@@ -181,24 +182,14 @@ class MPC:
         """ Adjust hard boundries """
         for t in range(Nt):
             for i in range(Ny):
-                self.__varlb['covariance', t] = 0*np.eye(Ny).flatten()
+                # Lower boundry of diagonal
+                self.__varlb['covariance', t, i + i*Ny] = 0
             self.__varlb['eps', t] = 0
             if xub is not None:
                 self.__varub['mean', t] = xub
             if xlb is not None:
                 self.__varlb['mean', t] = xlb
-
-        # Build up constraints and objective
-        obj = ca.MX(0)
-        con_eq = []
-        con_ineq = []
-        con_ineq_lb = []
-        con_ineq_ub = []
-
-        # Set initial value
-        con_eq.append(var['mean', 0] - mean_0_s)
-        con_eq.append(var['covariance', 0] - covariance_0_s)
-        u_past = u_0_s
+         
         
         """ Input covariance matrix """
         covar_x_s = ca.MX.sym('covar_x', Ny, Ny)
@@ -219,6 +210,20 @@ class MPC:
         covar_s[:Ny, Ny:] = cov_xu
         covar_func = ca.Function('covar', [covar_x_s], [covar_s])
         
+        
+        """ Set initial values """
+        obj = ca.MX(0)
+        con_eq = []
+        con_ineq = []
+        con_ineq_lb = []
+        con_ineq_ub = []
+        con_eq.append(var['mean', 0] - mean_0_s)
+        con_eq.append(var['covariance', 0] - covariance_0_s)
+        u_past = u_0_s
+        
+        cholesky = ca.Function('cholesky', [covar_x_sx], [ca.chol(covar_x_sx).T])
+       
+
         """ Build constraints """
         for t in range(Nt):
             # Input to GP
@@ -237,6 +242,8 @@ class MPC:
                 covar_x_next_pred = ca.MX(Ny, Ny)
             else:
                 mean_next_pred, covar_x_next_pred = self.__gp.predict(mean_t, u_t, covar_t)
+                
+            S = cholesky(covar_x_next_pred)
 
             # Continuity constraints
             mean_next = var['mean', t + 1]
@@ -245,17 +252,17 @@ class MPC:
             con_eq.append(covar_x_next_pred.reshape((Ny * Ny, 1)) - covar_x_next)
 
             # Chance state constraints
-            if xub is not None:
-                con_ineq.append(mean_t + quantile_x * ca.sqrt(ca.diag(covar_x_t.reshape((Ny, Ny))) + eps_sqrt))
-                con_ineq_ub.append(xub)
-                con_ineq_lb.append(np.full((Ny,), -ca.inf))
-            if xlb is not None:
-                con_ineq.append(mean_t - quantile_x * ca.sqrt(ca.diag(covar_x_t.reshape((Ny, Ny))) + eps_sqrt))
-                con_ineq_ub.append(np.full((Ny,), ca.inf))
-                con_ineq_lb.append(xlb)
+            cons = self.__constraint(mean_next_pred, covar_x_next_pred, Hx, quantile_x, xub, xlb)
+            con_ineq.extend(cons['con'])
+            con_ineq_lb.extend(cons['con_lb'])
+            con_ineq_ub.extend(cons['con_ub'])
 
             # Input constraints
             cov_u = covar_u_func(covar_x_t, K_s.reshape((Nu, Ny)))
+#            cons = self.__constraint(u_t, cov_u, Hu, quantile_u, uub, ulb)
+#            con_ineq.extend(cons['con_ineq'])
+#            con_ineq_lb.extend(cons['con_ineq_lb'])
+#            con_ineq_ub.extend(cons['con_ineq_ub'])
             if uub is not None:
                 con_ineq.append(u_t)
                 con_ineq_ub.extend(uub)
@@ -370,7 +377,7 @@ class MPC:
         # Initialize variables
         self.__mean          = np.full((self.__Nsim + 1, Ny), x0)
         self.__mean_pred     = np.full((self.__Nsim + 1, Ny), x0)
-        self.__covariance    = np.full((self.__Nsim + 1, Ny, Ny), np.eye(Ny)* 1e-6)
+        self.__covariance    = np.full((self.__Nsim + 1, Ny, Ny), np.eye(Ny)* 0)
         self.__u             = np.full((self.__Nsim, Nu), u0)
 
         self.__mean[0]       = x0
@@ -404,7 +411,8 @@ class MPC:
 
             """ Initial values """
             self.__var_init['mean', 0]  = self.__mean[t]
-
+            
+            # Get constraint parameters
             if con_par_func is not None:
                 con_par = con_par_func(self.__mean[t, :])
             else:
@@ -413,6 +421,7 @@ class MPC:
                     raise TypeError(('Number of constraint parameters ({x}) is greater than zero, '
                                     'but no parameter function is provided.'
                                         ).format(x=self.__num_con_par))
+
             param  = ca.vertcat(self.__mean[t, :], self.__x_sp,
                                 self.__covariance[t, :].flatten(), u0, K.flatten(),
                                 con_par)
@@ -575,25 +584,33 @@ class MPC:
 
         return sqnorm_x(x - x_ref, Q) + sqnorm_u(u, R) + sqnorm_u(delta_u, S) \
                 + trace_x(Q, covar_x)  + trace_u(R, covar_u)
+                
 
 
     def __constraint(self, mean, covar, H, quantile, ub, lb):
         """ Build up chance constraint """
         r = ca.SX.sym('r')
         mean_s = ca.SX.sym('mean', ca.MX.size(mean))
-        covar_s = ca.SX.sym('r', ca.MX.size(covar))
+        covar_s = ca.SX.sym('cov', ca.MX.size(covar))
+        S_s = ca.SX.sym('S', ca.MX.size(covar))
         H_s = ca.SX.sym('H', 1, ca.MX.size2(H))
-
-        con_func = ca.Function('con', [mean_s, covar_s, H_s, r],
-                               [H_s @ mean_s + r * ca.sqrt(H_s @ covar_s @ H_s.T)])
+        
+        cholesky = ca.Function('cholesky', [covar_s], [ca.chol(covar_s).T])
+        S = cholesky(covar)
+        
+#        con_func = ca.Function('con', [mean_s, covar_s, H_s, r],
+#                               [H_s @ mean_s + r * ca.sqrt(H_s @ covar_s @ H_s.T)])
+        con_func = ca.Function('con', [mean_s, S_s, H_s, r],
+                               [H_s @ mean_s + r * ca.norm_2(H_s @ S_s)])
+        
         con = []
         con_lb = []
         con_ub = []        
         for i in range(ca.MX.size1(mean)):
-            con.append(con_func(mean, covar, H[i, :], quantile[i]))
+            con.append(con_func(mean, S, H[i, :], quantile[i]))
             con_ub.append(ub[i])
             con_lb.append(-np.inf)
-            con.append(con_func(mean, covar, H[i, :], -quantile[i]))
+            con.append(con_func(mean, S, H[i, :], -quantile[i]))
             con_ub.append(np.inf)
             con_lb.append(lb[i])
         cons = dict(con=con, con_lb=con_lb, con_ub=con_ub)
@@ -622,9 +639,11 @@ class MPC:
         dt = self.__dt
         Nu = self.__Nu
         Nt_sim, Nx = x.shape
+        
         # First predictin horizon
         x_pred = self.__mean_prediction
         var_pred = self.__var_prediction
+        
         # One step prediction
         var = np.zeros((Nt_sim, Nx))
         mean = self.__mean_pred

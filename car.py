@@ -130,7 +130,7 @@ def inequality_constraints(x, covar, u, eps, par):
     ellipse = ca.Function('ellipse', [Xcg_s, Ycg_s, obs_s],
                           [ ((Xcg_s - obs_s[0]) / (obs_s[2] + car_length))**2
                            + ((Ycg_s - obs_s[1]) / (obs_s[3] + car_width))**2] )
-    con_ineq.append(1 - ellipse(x[4], x[5], par) + eps)
+    con_ineq.append(1 - ellipse(x[4], x[5], par))
     
     con_ineq_ub.append(0)
     con_ineq_lb.append(-np.inf)
@@ -147,7 +147,7 @@ solver_opts = {}
 solver_opts['ipopt.linear_solver'] = 'ma27'
 solver_opts['ipopt.max_cpu_time'] = 10
 #solver_opts['ipopt.max_iter'] = 75
-solver_opts['expand']= False
+solver_opts['expand']= True
 
 
 dt = 0.05
@@ -200,7 +200,7 @@ slip_max = 4.0 * np.pi / 180
 road_bound = 2.0
 car_width = 1.0
 car_length = 10.0
-obs = np.array([[40, .3, 1., 0.2],
+obs = np.array([[30, .3, 1., 0.2],
                [80, -0.5, 1., .2],
                [150, 0., 1., .2]])
 
@@ -215,19 +215,19 @@ S = np.diag([1, 10])
 lam = 10
 
 
-mpc = MPC(horizon=20*dt, model=model,
-          discrete_method='rk4',
-          ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
-          terminal_constraint=None, costFunc='quad', feedback=False,
-          solver_opts=solver_opts, 
-          inequality_constraints=inequality_constraints, num_con_par=4
-          )
-
-
-x, u = mpc.solve(x0, sim_time=300*dt, x_sp=x_sp, debug=False, noise=False,
-                 con_par_func=constraint_parameters)
-mpc.plot()
-plot_car(x[:, 4], x[:, 5])
+#mpc = MPC(horizon=20*dt, model=model,
+#          discrete_method='rk4',
+#          ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
+#          terminal_constraint=None, costFunc='quad', feedback=False,
+#          solver_opts=solver_opts, 
+#          inequality_constraints=inequality_constraints, num_con_par=4
+#          )
+#
+#
+#x, u = mpc.solve(x0, sim_time=300*dt, x_sp=x_sp, debug=False, noise=False,
+#                 con_par_func=constraint_parameters)
+#mpc.plot()
+#plot_car(x[:, 4], x[:, 5])
 #u1 = u[:20,:]
 #model.predict_compare(x[0], u1)
 

@@ -62,7 +62,7 @@ def inequality_constraints(x, covar, u, eps):
 solver_opts = {
                 'ipopt.linear_solver' : 'ma27',
                 'ipopt.max_cpu_time' : 10,
-                'expand' : True,
+                'expand' : False,
 }
 
 meanFunc = 'zero'
@@ -123,12 +123,12 @@ mpc = MPC(horizon=10*dt, gp=gp, model=model,
           gp_method='TA',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S,
           terminal_constraint=None, costFunc='quad', feedback=False, 
-          solver_opts=solver_opts, discrete_method='rk4',
+          solver_opts=solver_opts, discrete_method='exact',
           inequality_constraints=None
           )
 
 
-x, u = mpc.solve(x0, u0=u0,sim_time=15*dt, x_sp=x_sp, debug=False, noise=False)
+x, u = mpc.solve(x0, u0=u0,sim_time=20*dt, x_sp=x_sp, debug=False, noise=False)
 mpc.plot()
 
 A, B = model.discrete_rk4_linearize(x0, u0)
