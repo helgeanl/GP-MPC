@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Model Predictive Control with Gaussian Process
-@author: Helge-André Langåker
+Gaussian Process functions
+Copyright (c) 2018, Helge-André Langåker
 """
 from __future__ import absolute_import
 from __future__ import division
@@ -85,7 +85,7 @@ class MPC:
         self.__gp = gp
         self.__feedback = feedback
         self.__discrete_method = discrete_method
-        
+
 
         """ Default penalty values """
         if P is None:
@@ -98,12 +98,12 @@ class MPC:
             S = np.eye(Nu) * 0.1
         if lam is None:
             lam = 1000
-            
+
         self.__Q = Q
         self.__P = P
         self.__R = R
         self.__S = S
-        
+
         if xub is None:
             xub = np.full((Ny), np.inf)
         if xlb is None:
@@ -112,8 +112,8 @@ class MPC:
             uub = np.full((Nu), np.inf)
         if ulb is None:
             ulb = np.full((Nu), -np.inf)
-            
-      
+
+
         eps_sqrt =0
         #TODO: Clean this up
         percentile = 0.95
@@ -130,15 +130,15 @@ class MPC:
         covariance_0_s = ca.MX.sym('covariance_0', Ny * Ny)
         K_s            = ca.MX.sym('K', Nu * Ny)
         con_par        = ca.MX.sym('con_par', num_con_par)
-        param_s        = ca.vertcat(mean_0_s, mean_ref_s, covariance_0_s, 
+        param_s        = ca.vertcat(mean_0_s, mean_ref_s, covariance_0_s,
                                     u_0_s, K_s, con_par)
 
-        
+
 
         """ Select wich GP function to use """
         if discrete_method is 'gp':
             self.__gp.set_method(gp_method)
-        
+
         if solver_opts['expand'] is not False and discrete_method is 'exact':
             raise NameError("Can't use exact discrete system with expanded graph")
 
@@ -151,7 +151,7 @@ class MPC:
 
         # Define which cost function to use
         self.__set_cost_function(costFunc, mean_ref_s)
-        
+
 
         """ Feedback function """
         mean_s = ca.MX.sym('mean', Ny)
@@ -189,17 +189,17 @@ class MPC:
                 self.__varub['mean', t] = xub
             if xlb is not None:
                 self.__varlb['mean', t] = xlb
-         
-        
+
+
         """ Input covariance matrix """
         covar_x_s = ca.MX.sym('covar_x', Ny, Ny)
         covar_x_sx = ca.SX.sym('cov_x', Ny, Ny)
         K_sx = ca.SX.sym('K', Nu, Ny)
 
-        covar_u_func = ca.Function('cov_u', [covar_x_sx, K_sx], 
+        covar_u_func = ca.Function('cov_u', [covar_x_sx, K_sx],
                                    [K_sx @ covar_x_sx @ K_sx.T])
 
-        cov_xu_func = ca.Function('cov_xu', [covar_x_sx, K_sx], 
+        cov_xu_func = ca.Function('cov_xu', [covar_x_sx, K_sx],
                                   [covar_x_sx @ K_sx.T])
 
         covar_s = ca.MX(Nx, Nx)
@@ -209,8 +209,8 @@ class MPC:
         covar_s[Ny:, :Ny] = cov_xu.T
         covar_s[:Ny, Ny:] = cov_xu
         covar_func = ca.Function('covar', [covar_x_s], [covar_s])
-        
-        
+
+
         """ Set initial values """
         obj = ca.MX(0)
         con_eq = []
@@ -220,9 +220,9 @@ class MPC:
         con_eq.append(var['mean', 0] - mean_0_s)
         con_eq.append(var['covariance', 0] - covariance_0_s)
         u_past = u_0_s
-        
+
         cholesky = ca.Function('cholesky', [covar_x_sx], [ca.chol(covar_x_sx).T])
-       
+
 
         """ Build constraints """
         for t in range(Nt):
@@ -242,7 +242,7 @@ class MPC:
                 covar_x_next_pred = ca.MX(Ny, Ny)
             else:
                 mean_next_pred, covar_x_next_pred = self.__gp.predict(mean_t, u_t, covar_t)
-                
+
             S = cholesky(covar_x_next_pred)
 
             # Continuity constraints
@@ -271,7 +271,7 @@ class MPC:
                 con_ineq.append(u_t)
                 con_ineq_ub.append(np.full((Nu,), ca.inf))
                 con_ineq_lb.append(ulb)
-           
+
             # Add extra constraints
             if inequality_constraints is not None:
                 cons = inequality_constraints(var['mean', t],
@@ -322,7 +322,7 @@ class MPC:
         if solver_opts is not None:
             options.update(solver_opts)
         self.__solver = ca.nlpsol('mpc_solver', 'ipopt', nlp, options)
-        
+
 
 
         # First prediction used in the NLP, used in plot later
@@ -351,9 +351,9 @@ class MPC:
             x_sp: State set point, default is zero
             u0: Initial input
             noise: If True, add gaussian noise to the simulation
-            con_par_func: Function to calculate the parameters to pass to the 
+            con_par_func: Function to calculate the parameters to pass to the
                           inequality function, inputs the current state.
-                          
+
         # Returns:
             mean: Simulated output using the optimal control inputs
             u: Optimal control inputs
@@ -391,7 +391,7 @@ class MPC:
         self.__var_init['covariance', 0] = self.__covariance[0].flatten()
         self.__lam_x0 = np.zeros(self.__num_var)
         self.__lam_g0 = 0
-        
+
         # Linearize around operating point and calculate LQR gain matrix
         if self.__feedback:
             if self.__discrete_method is 'exact':
@@ -411,7 +411,7 @@ class MPC:
 
             """ Initial values """
             self.__var_init['mean', 0]  = self.__mean[t]
-            
+
             # Get constraint parameters
             if con_par_func is not None:
                 con_par = con_par_func(self.__mean[t, :])
@@ -472,9 +472,9 @@ class MPC:
                 return self.__mean, self.__u
         return self.__mean, self.__u
 
-    
+
     def __set_cost_function(self, costFunc, mean_ref_s):
-        """ Define stage cost and terminal cost 
+        """ Define stage cost and terminal cost
         """
         # Create GP and cos function symbols
         mean_s = ca.MX.sym('mean', self.__Ny)
@@ -502,8 +502,8 @@ class MPC:
                                         mean_ref_s, covar_x_s,  P)])
         else:
              raise NameError('No cost function called: ' + costFunc)
-        
-    
+
+
     def __cost_lf(self, x, x_ref, covar_x, P, s=1):
         """ Terminal cost function: Expected Value of Quadratic Cost
         """
@@ -584,7 +584,7 @@ class MPC:
 
         return sqnorm_x(x - x_ref, Q) + sqnorm_u(u, R) + sqnorm_u(delta_u, S) \
                 + trace_x(Q, covar_x)  + trace_u(R, covar_u)
-                
+
 
 
     def __constraint(self, mean, covar, H, quantile, ub, lb):
@@ -594,18 +594,18 @@ class MPC:
         covar_s = ca.SX.sym('cov', ca.MX.size(covar))
         S_s = ca.SX.sym('S', ca.MX.size(covar))
         H_s = ca.SX.sym('H', 1, ca.MX.size2(H))
-        
+
         cholesky = ca.Function('cholesky', [covar_s], [ca.chol(covar_s).T])
         S = cholesky(covar)
-        
+
 #        con_func = ca.Function('con', [mean_s, covar_s, H_s, r],
 #                               [H_s @ mean_s + r * ca.sqrt(H_s @ covar_s @ H_s.T)])
         con_func = ca.Function('con', [mean_s, S_s, H_s, r],
                                [H_s @ mean_s + r * ca.norm_2(H_s @ S_s)])
-        
+
         con = []
         con_lb = []
-        con_ub = []        
+        con_ub = []
         for i in range(ca.MX.size1(mean)):
             con.append(con_func(mean, S, H[i, :], quantile[i]))
             con_ub.append(ub[i])
@@ -639,18 +639,18 @@ class MPC:
         dt = self.__dt
         Nu = self.__Nu
         Nt_sim, Nx = x.shape
-        
+
         # First predictin horizon
         x_pred = self.__mean_prediction
         var_pred = self.__var_prediction
-        
+
         # One step prediction
         var = np.zeros((Nt_sim, Nx))
         mean = self.__mean_pred
         for t in range(Nt_sim):
             var[t] = np.diag(self.__covariance[t])
 
-        
+
         x_sp = self.__x_sp * np.ones((Nt_sim, Nx))
 
         if x_pred is not None:
@@ -707,11 +707,11 @@ def lqr(A, B, Q, R):
         x[k+1] = A x[k] + B u[k]
         u[k] = -K*x[k]
         cost = sum x[k].T*Q*x[k] + u[k].T*R*u[k]
-    
+
     # Arguments:
         A, B: Linear system matrices
         Q, R: State and input penalty matrices, both positive definite
-    
+
     # Returns:
         K: LQR gain matrix
         S: Solution to the Riccati equation

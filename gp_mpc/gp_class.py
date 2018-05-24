@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Model Predictive Control with Gaussian Process
-@author: Helge-André Langåker
+Gaussian Process Model
+Copyright (c) 2018, Helge-André Langåker
 """
 from __future__ import absolute_import
 from __future__ import division
@@ -17,7 +17,7 @@ from .mpc_class import lqr
 
 class GP:
     def __init__(self, X, Y, mean_func="zero", gp_method="TA",
-                 optimizer_opts=None, hyper=None, normalize=True, 
+                 optimizer_opts=None, hyper=None, normalize=True,
                  xlb=None, xub=None, ulb=None, uub=None, meta=None):
         """ Initialize and optimize GP model
 
@@ -31,11 +31,11 @@ class GP:
         self.__Nx = X.shape[1]
         self.__N = X.shape[0]
         self.__Nu = self.__Nx - self.__Ny
-        
+
         self.__gp_method = gp_method
         self.__mean_func = mean_func
         self.__normalize = normalize
-        
+
         if meta is not None:
             self.__meanY = np.array(meta['meanY'])
             self.__stdY  = np.array(meta['stdY'])
@@ -45,7 +45,7 @@ class GP:
             self.__stdX = np.array(meta['stdX'])
             self.__meanU = np.array(meta['meanU'])
             self.__stdU  = np.array(meta['stdU'])
-        
+
         """ Optimize hyperparameters """
         if hyper is None:
             self.optimize(X=X, Y=Y, opts=optimizer_opts, mean_func=mean_func, normalize=normalize,
@@ -58,7 +58,7 @@ class GP:
             self.__hyper_length_scales   = np.array(hyper['length_scale'])
             self.__hyper_signal_variance = np.array(hyper['signal_var'])
             self.__hyper_noise_variance  = np.array(hyper['noise_var'])
-            self.__hyper_mean = np.array(hyper['mean']) 
+            self.__hyper_mean = np.array(hyper['mean'])
 
         # Build GP
         self.__mean, self.__covar, self.__mean_jac = build_gp(self.__invK, self.__X,
@@ -73,7 +73,7 @@ class GP:
                  xlb=None, xub=None, ulb=None, uub=None):
         self.__mean_func = mean_func
         self.__normalize = normalize
-        
+
         if normalize:
             self.__xlb = np.array(xlb)
             self.__xub = np.array(xub)
@@ -90,7 +90,7 @@ class GP:
             self.__meanU = np.mean(X[:, self.__Ny:], 0)
             self.__stdU  = np.std(X[:, self.__Ny:], 0)
 
-        
+
         if X is not None:
             X = np.array(X).copy()
             self.__X = X.copy()
@@ -106,7 +106,7 @@ class GP:
             self.__Y = self.standardize(Y, self.__meanY, self.__stdY)
 #            self.__X = self.normalize(self.__X, self.__lb, self.__ub)
             self.__X = self.standardize(X, self.__meanZ, self.__stdZ)
-            
+
         opt = train_gp(self.__X, self.__Y, meanFunc=self.__mean_func,
                            optimizer_opts=opts)
         self.__hyper = opt['hyper']
@@ -195,7 +195,7 @@ class GP:
     def normalize(self, u, lb, ub):
         return (u - lb) / (ub - lb)
 
-    def inverse_mean(self, x, mean, std):     
+    def inverse_mean(self, x, mean, std):
         return (x * std) + mean
 
     def inverse_variance(self, variance):
@@ -234,7 +234,7 @@ class GP:
 
     def __to_dict(self):
         """ Store model data in a struct """
-        gp_dict = {}    
+        gp_dict = {}
         gp_dict['X'] = self.__X.tolist()
         gp_dict['Y'] = self.__Y.tolist()
         gp_dict['hyper'] = dict(
@@ -243,10 +243,10 @@ class GP:
                     alpha = self.__alpha.tolist(),
                     chol = self.__chol.tolist(),
                     length_scale = self.__hyper_length_scales.tolist(),
-                    signal_var = self.__hyper_signal_variance.tolist(), 
-                    noise_var = self.__hyper_noise_variance.tolist(), 
+                    signal_var = self.__hyper_signal_variance.tolist(),
+                    noise_var = self.__hyper_noise_variance.tolist(),
                     mean = self.__hyper_mean.tolist()
-                )        
+                )
         gp_dict['mean_func'] = self.__mean_func
         gp_dict['normalize'] = self.__normalize
         if self.__normalize:
@@ -255,14 +255,14 @@ class GP:
             gp_dict['ulb'] = self.__ulb.tolist()
             gp_dict['uub'] = self.__uub.tolist()
             gp_dict['meta'] = dict(
-                        meanY = self.__meanY.tolist(), 
-                        stdY = self.__stdY.tolist(),  
+                        meanY = self.__meanY.tolist(),
+                        stdY = self.__stdY.tolist(),
                         meanZ = self.__meanZ.tolist(),
-                        stdZ = self.__stdZ.tolist(), 
-                        meanX = self.__meanX.tolist(), 
-                        stdX = self.__stdX.tolist(), 
-                        meanU = self.__meanU.tolist(), 
-                        stdU = self.__stdU.tolist()  
+                        stdZ = self.__stdZ.tolist(),
+                        meanX = self.__meanX.tolist(),
+                        stdX = self.__stdX.tolist(),
+                        meanU = self.__meanU.tolist(),
+                        stdU = self.__stdU.tolist()
                 )
         return gp_dict
 
@@ -282,8 +282,8 @@ class GP:
         with open(filename + ".json") as json_data:
             input_dict = json.load(json_data)
         return cls(**input_dict)
-        
-    
+
+
     def predict_compare(self, x0, u, model, num_cols=2, xnames=None,
                         title=None, feedback=False):
         """ Predict and compare all GP methods
@@ -291,7 +291,7 @@ class GP:
         # Predict future
         Nx = self.__Nx
         Ny = self.__Ny
-        
+
         dt = model.sampling_time()
         Nt = np.size(u, 0)
         sim_time = Nt * dt
@@ -303,8 +303,8 @@ class GP:
         covar = np.eye(Nx) * 1e-5 # Initial covar input matrix
         Q = np.eye(Ny)
         R= np.eye(Nx - Ny)
-        
-        
+
+
         for i in range(len(methods)):
             self.set_method(methods[i])
             mean_t = x0

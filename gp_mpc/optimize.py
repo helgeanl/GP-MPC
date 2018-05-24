@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Optimize hyperparameters
-@author: Helge-André Langåker
+Optimize hyperparameters for Gaussian Process Model
+Copyright (c) 2018, Helge-André Langåker
 """
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from sys import path
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
 
 import time
 import pyDOE
@@ -78,12 +76,12 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero', prior=None):
 
     alph = ca.SX.sym('alph', ca.MX.size(alpha))
     detK = ca.SX.sym('det')
-    
+
     # Calculate hyperpriors
     theta = ca.SX.sym('theta')
     mu = ca.SX.sym('mu')
     s2 = ca.SX.sym('s2')
-    prior_gauss = ca.Function('hyp_prior', [theta, mu, s2], 
+    prior_gauss = ca.Function('hyp_prior', [theta, mu, s2],
                               [-(theta - mu)**2/(2*s2) - 0.5*ca.log(2*ca.pi*s2)])
     log_prior = 0
     if prior is not None:
@@ -91,8 +89,8 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero', prior=None):
             log_prior += prior_gauss(ell[i], prior['ell_mean'], prior['ell_std']**2)
         log_prior += prior_gauss(sf2, prior['sf_mean'], prior['sf_std']**2)
         log_prior += prior_gauss(sn2, prior['sn_mean'], prior['sn_std']**2)
-    
-    NLL = ca.Function('NLL', [Y_s, alph, detK], 
+
+    NLL = ca.Function('NLL', [Y_s, alph, detK],
                       [0.5 * ca.mtimes(Y_s.T, alph) + 0.5 * detK])
     return NLL(Y - m(X.T), alpha, log_detK) + log_prior
 
@@ -157,7 +155,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     hyp_s        = ca.MX.sym('hyp', 1, num_hyp)
     squaredist_s = ca.MX.sym('sqdist', N, N * Nx)
     param_s      = ca.horzcat(squaredist_s, Y_s)
-    
+
     NLL_func = ca.Function('NLL', [hyp_s, X_s, Y_s, squaredist_s],
                            [calc_NLL(hyp_s, X_s, Y_s, squaredist_s,
                                      meanFunc=meanFunc, prior=prior)])
@@ -179,7 +177,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
         opts['ipopt.warm_start_init_point'] = 'yes'
         warm_start = True
     Solver = ca.nlpsol('Solver', 'ipopt', nlp, opts)
-    
+
     hyp_opt = np.zeros((Ny, num_hyp))
     lam_x_opt = np.zeros((Ny, num_hyp))
     invK = np.zeros((Ny, N, N))
@@ -193,22 +191,22 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
         meanF     = np.mean(Y)
         lb        = -np.inf * np.ones(num_hyp)
         ub        = np.inf * np.ones(num_hyp)
-#        
+#
         lb[:Nx]    = 1e-2
         ub[:Nx]    = 1e2
         lb[Nx]     = 1e-8
         ub[Nx]     = 1e2
         lb[Nx + 1] = 10**-6
         ub[Nx + 1] = 10**-4
-        
+
 #        lb[:Nx]    = np.sqrt(10**(-3))
 #        ub[:Nx]    = np.sqrt(10**(3))
 #        lb[Nx]     = stdF / 5.
 #        ub[Nx]     = stdF * 5.
 #        lb[Nx + 1] = 10**-6
 #        ub[Nx + 1] = 10**-4
-#        
-        
+#
+
 #        lb[:Nx]    = np.sqrt(10**(-3)) #stdX / 10
 #        ub[:Nx]    = np.sqrt(10**(3)) #stdX * 10
 #        lb[Nx]     = np.sqrt(10**(-3)) #stdF / 10
@@ -225,7 +223,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
 #            hyp_init = hyp_init * (ub - lb) + lb
         else:
             hyp_init = hyper_init[output, :]
-        
+
         if meanFunc is 'const':
             lb[-1] = meanF / 10 - 1e-8
             ub[-1] = meanF * 10 + 1e-8
@@ -233,7 +231,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
             lb[-1] = meanF / 10 -1e-8
             ub[-1] = meanF * 10 + 1e-8
             lb[-h_m:-1] = -np.inf
-            ub[-h_m:-1] = np.inf  
+            ub[-h_m:-1] = np.inf
 
         squaredist = np.zeros((N, N * Nx))
         for i in range(Nx):
@@ -313,9 +311,9 @@ def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc, alpha=None):
         loss += (Y_test[i, :] - y)**2
     loss = loss / N
     standardized_loss = loss/ np.std(Y_test, 0)
-        
-    #TODO: Add negative log porability 
-    
+
+    #TODO: Add negative log porability
+
     print('\n________________________________________')
     print('# Validation of GP model ')
     print('----------------------------------------')

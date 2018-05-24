@@ -1,10 +1,13 @@
-# Generate simulation data for regression model
+# -*- coding: utf-8 -*-
+"""
+Differential-Algebraic Equation Model
+Copyright (c) 2018, Helge-André Langåker
+"""
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from sys import path
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
 
 import pyDOE
 import numpy as np
@@ -100,11 +103,11 @@ class Model:
 
         # Jacobian of exact discretization
         self.__discrete_jac_x = ca.Function('jac_x', [x, u, p],
-                                   [ca.jacobian(self.Integrator(x0=x, 
+                                   [ca.jacobian(self.Integrator(x0=x,
                                              p=ca.vertcat(u,p))['xf'], x)])
 
-        self.__discrete_jac_u = ca.Function('jac_u', [x, u, p], 
-                                    [ca.jacobian(self.Integrator(x0=x, 
+        self.__discrete_jac_u = ca.Function('jac_u', [x, u, p],
+                                    [ca.jacobian(self.Integrator(x0=x,
                                               p=ca.vertcat(u,p))['xf'], u)])
 
 
@@ -182,7 +185,7 @@ class Model:
             out = self.Integrator(x0=x0, p=par)
         return np.array(out["xf"]).flatten()
 
-    
+
     def set_method(self, method='exact'):
         """ Select wich discrete time method to use """
 
@@ -358,7 +361,7 @@ class Model:
         y_lin[0] = x0
         for t in range(Nt):
             y_lin[t+1] = Ad @ y_lin[t] + Bd @ u[t]
-            
+
         #  Linearized Model of RK4 discretization
         Ad, Bd = self.discrete_rk4_linearize(x0, u[0])
         y_rk4_lin = np.zeros((Nt + 1, Nx))
