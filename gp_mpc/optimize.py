@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-Optimize hyperparameters
-@author: Helge-André Langåker
+Optimize hyperparameters for Gaussian Process Model
+Copyright (c) 2018, Helge-André Langåker
 """
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from sys import path
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
 
 import time
 import pyDOE
@@ -20,7 +18,7 @@ from .gp_functions import get_mean_function, gp, gp_exact_moment
 # -----------------------------------------------------------------------------
 # Optimization of hyperperameters as a constrained minimization problem
 # -----------------------------------------------------------------------------
-def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
+def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero', prior=None):
     """ Objective function
 
     Calculate the negative log likelihood function using Casadi SX symbols.
@@ -40,7 +38,7 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
     sf2 = hyper[Nx]**2
     sn2 = hyper[Nx + 1]**2
 
-    m = get_mean_function(hyper, X, func=meanFunc)
+    m = get_mean_function(hyper, X.T, func=meanFunc)
 
     # Calculate covariance matrix
     K_s = ca.SX.sym('K_s',N, N)
@@ -70,16 +68,31 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero'):
     Y_s = ca.SX.sym('Y', ca.MX.size(Y))
     L_s = ca.SX.sym('L', ca.Sparsity.lower(N))
     sol = ca.Function('sol', [L_s, Y_s], [ca.solve(L_s, Y_s)])
-    invLy = sol(L, Y - m(X))
+    invLy = sol(L, Y - m(X.T))
 
     invLy_s = ca.SX.sym('invLy', ca.MX.size(invLy))
     sol2 = ca.Function('sol2', [L_s, invLy_s], [ca.solve(L_s.T, invLy_s)])
     alpha = sol2(L, invLy)
 
     alph = ca.SX.sym('alph', ca.MX.size(alpha))
-    det = ca.SX.sym('det')
-    NLL = ca.Function('NLL', [Y_s, alph, det], [0.5 * ca.mtimes(Y_s.T, alph) + 0.5 * det])
-    return NLL(Y - m(X), alpha, log_detK)
+    detK = ca.SX.sym('det')
+
+    # Calculate hyperpriors
+    theta = ca.SX.sym('theta')
+    mu = ca.SX.sym('mu')
+    s2 = ca.SX.sym('s2')
+    prior_gauss = ca.Function('hyp_prior', [theta, mu, s2],
+                              [-(theta - mu)**2/(2*s2) - 0.5*ca.log(2*ca.pi*s2)])
+    log_prior = 0
+    if prior is not None:
+        for i in range(Nx):
+            log_prior += prior_gauss(ell[i], prior['ell_mean'], prior['ell_std']**2)
+        log_prior += prior_gauss(sf2, prior['sf_mean'], prior['sf_std']**2)
+        log_prior += prior_gauss(sn2, prior['sn_mean'], prior['sn_std']**2)
+
+    NLL = ca.Function('NLL', [Y_s, alph, detK],
+                      [0.5 * ca.mtimes(Y_s.T, alph) + 0.5 * detK])
+    return NLL(Y - m(X.T), alpha, log_detK) + log_prior
 
 
 def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
@@ -126,6 +139,15 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     h_sf    = 1     # Standard deviation function
     h_sn    = 1     # Standard deviation noise
     num_hyp = h_ell + h_sf + h_sn + h_m
+    prior = None
+#    prior = dict(
+#                ell_mean = 10,
+#                ell_std = 10,
+#                sf_mean  = 10,
+#                sf_std  = 10,
+#                sn_mean  = 1e-5,
+#                sn_std  = 1e-5
+#            )
 
     # Create solver
     Y_s          = ca.MX.sym('Y', N)
@@ -136,7 +158,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
 
     NLL_func = ca.Function('NLL', [hyp_s, X_s, Y_s, squaredist_s],
                            [calc_NLL(hyp_s, X_s, Y_s, squaredist_s,
-                                     meanFunc=meanFunc)])
+                                     meanFunc=meanFunc, prior=prior)])
     nlp = {'x': hyp_s, 'f': NLL_func(hyp_s, X, Y_s, squaredist_s), 'p': param_s}
 
     # NLP solver options
@@ -145,7 +167,8 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     opts['print_time']          = False
     opts['verbose']             = False
     opts['ipopt.print_level']   = 1
-    opts["ipopt.tol"]          = 1e-8
+    opts['ipopt.tol']          = 1e-8
+    opts['ipopt.mu_strategy'] = 'adaptive'
     if optimizer_opts is not None:
         opts.update(optimizer_opts)
 
@@ -154,43 +177,61 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
         opts['ipopt.warm_start_init_point'] = 'yes'
         warm_start = True
     Solver = ca.nlpsol('Solver', 'ipopt', nlp, opts)
-    
+
     hyp_opt = np.zeros((Ny, num_hyp))
     lam_x_opt = np.zeros((Ny, num_hyp))
     invK = np.zeros((Ny, N, N))
-    invK_Y = np.zeros((Ny, N))
+    alpha = np.zeros((Ny, N))
+    chol = np.zeros((Ny, N, N))
 
     print('\n________________________________________')
     print('# Optimizing hyperparameters (N=%d)' % N )
     print('----------------------------------------')
     for output in range(Ny):
-        stdX      = np.std(X)
-        stdF      = np.std(Y[:, output])
         meanF     = np.mean(Y)
-        lb        = np.zeros(num_hyp)
-        ub        = np.zeros(num_hyp)
-        #ub[:]     = np.inf
-        lb[:Nx]    = stdX / 20
-        ub[:Nx]    = stdX * 20
-        lb[Nx]     = stdF / 20
-        ub[Nx]     = stdF * 20
-        lb[Nx + 1] = 10**-5 / 10
-        ub[Nx + 1] = 10**-5 * 10
+        lb        = -np.inf * np.ones(num_hyp)
+        ub        = np.inf * np.ones(num_hyp)
+#
+        lb[:Nx]    = 1e-2
+        ub[:Nx]    = 1e2
+        lb[Nx]     = 1e-8
+        ub[Nx]     = 1e2
+        lb[Nx + 1] = 10**-6
+        ub[Nx + 1] = 10**-4
 
-        if meanFunc is 'const':
-            lb[-1] = meanF / 5
-            ub[-1] = meanF * 5
-        elif meanFunc is not 'zero':
-            lb[-1] = meanF / 5
-            ub[-1] = meanF * 5
-            lb[-h_m:-1] = 0
-            ub[-h_m:-1] = 2
+#        lb[:Nx]    = np.sqrt(10**(-3))
+#        ub[:Nx]    = np.sqrt(10**(3))
+#        lb[Nx]     = stdF / 5.
+#        ub[Nx]     = stdF * 5.
+#        lb[Nx + 1] = 10**-6
+#        ub[Nx + 1] = 10**-4
+#
+
+#        lb[:Nx]    = np.sqrt(10**(-3)) #stdX / 10
+#        ub[:Nx]    = np.sqrt(10**(3)) #stdX * 10
+#        lb[Nx]     = np.sqrt(10**(-3)) #stdF / 10
+#        ub[Nx]     = np.sqrt(10**(3)) #stdF * 10
+#        lb[Nx + 1] = 10**-6
+#        ub[Nx + 1] = 10**-4
 
         if hyper_init is None:
-            hyp_init = pyDOE.lhs(num_hyp, samples=1).flatten()
-            hyp_init = hyp_init * (ub - lb) + lb
+#            hyp_init = pyDOE.lhs(num_hyp, samples=1).flatten()
+            hyp_init = np.zeros((num_hyp))
+            hyp_init[:Nx] = 10
+            hyp_init[Nx] = 1
+            hyp_init[Nx + 1] = 1e-5
+#            hyp_init = hyp_init * (ub - lb) + lb
         else:
             hyp_init = hyper_init[output, :]
+
+        if meanFunc is 'const':
+            lb[-1] = meanF / 10 - 1e-8
+            ub[-1] = meanF * 10 + 1e-8
+        elif meanFunc is not 'zero':
+            lb[-1] = meanF / 10 -1e-8
+            ub[-1] = meanF * 10 + 1e-8
+            lb[-h_m:-1] = -np.inf
+            ub[-h_m:-1] = np.inf
 
         squaredist = np.zeros((N, N * Nx))
         for i in range(Nx):
@@ -205,10 +246,10 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
         for i in range(multistart):
             solve_time = -time.time()
             if warm_start:
-                res = res = Solver(x0=hyp_init, lam_x0=lam_x0[output],
+                res = Solver(x0=hyp_init, lam_x0=lam_x0[output],
                                    lbx=lb, ubx=ub, p=param)
             else:
-                res = res = Solver(x0=hyp_init, lbx=lb, ubx=ub, p=param)
+                res =  Solver(x0=hyp_init, lbx=lb, ubx=ub, p=param)
             status = Solver.stats()['return_status']
             obj[i]              = res['f']
             hyp_opt_loc[i, :]   = res['x']
@@ -238,14 +279,18 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
             L = np.linalg.cholesky(K)
         invL = np.linalg.solve(L, np.eye(N))
         invK[output, :, :] = np.linalg.solve(L.T, invL)
-        invK_Y[output] = np.dot(invK[output], Y[:, output])
+        chol[output] = L
+        m = get_mean_function(ca.MX(hyp_opt[output, :]), X.T, func=meanFunc)
+        mean = np.array(m(X.T)).reshape((N,))
+        alpha[output] = np.linalg.solve(L.T, np.linalg.solve(L, Y[:, output] - mean))
     print('----------------------------------------')
 
     opt = {}
     opt['hyper'] = hyp_opt
     opt['lam_x'] = lam_x_opt
     opt['invK'] = invK
-    opt['alpha'] = invK_Y
+    opt['alpha'] = alpha
+    opt['chol'] = chol
     return opt
 
 
@@ -258,7 +303,7 @@ def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc, alpha=None):
 
     gp_func = ca.Function('gp', [z_s],
                                 gp(invK, ca.MX(X), ca.MX(Y), ca.MX(hyper),
-                                   z_s.T, meanFunc=meanFunc, alpha=alpha))
+                                   z_s, meanFunc=meanFunc, alpha=alpha))
     loss = 0
 
     for i in range(N):
@@ -267,10 +312,8 @@ def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc, alpha=None):
     loss = loss / N
     standardized_loss = loss/ np.std(Y_test, 0)
 
-    
-        
-    #TODO: Add negative log porability 
-    
+    #TODO: Add negative log porability
+
     print('\n________________________________________')
     print('# Validation of GP model ')
     print('----------------------------------------')
