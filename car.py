@@ -9,8 +9,8 @@ from __future__ import division
 from __future__ import print_function
 
 from sys import path
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
-#path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.1-64bit")
+#path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
+path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.1-64bit")
 
 path.append(r"./GP_MPC/")
 
@@ -67,9 +67,9 @@ def ode(x, u, z, p):
                     + 2*Cr*(x[1] - lf*x[2]) / (x[0] + eps)),
                 1/Iz * (2*lf*mu*Fzf*u[0]*u[1] + 2*lf*Cf*(x[1] + lf*x[2]) / (x[0] + eps)
                     - 2*lf*Cf*u[1] - 2*lr*Cr*(x[1] - lf*x[2]) / (x[0] + eps)),
-                x[2],
-                x[0]*ca.cos(x[3]) - x[1]*ca.sin(x[3]),
-                x[0]*ca.sin(x[3]) + x[1]*ca.cos(x[3])
+#                x[2],
+#                x[0]*ca.cos(x[3]) - x[1]*ca.sin(x[3]),
+#                x[0]*ca.sin(x[3]) + x[1]*ca.cos(x[3])
             ]
     return  ca.vertcat(*dxdt)
 
@@ -144,26 +144,26 @@ def inequality_constraints(x, covar, u, eps, par):
 
 
 solver_opts = {}
-solver_opts['ipopt.linear_solver'] = 'ma27'
-solver_opts['ipopt.max_cpu_time'] = 10
+#solver_opts['ipopt.linear_solver'] = 'ma27'
+#solver_opts['ipopt.max_cpu_time'] = 20
 #solver_opts['ipopt.max_iter'] = 75
 solver_opts['expand']= True
 
 
 dt = 0.05
-Nx = 6
+Nx = 3
 Nu = 2
 R_n = np.eye(Nx) * 1e-5
 
 # Limits in the training data
 ulb = [-.5, -.034]
 uub = [.5, .034]
-xlb = [10.0, -.8, -.5, -.5, .0,  -1.]
-#xlb = [10.0, -.5, -.15]
-xub = [30.0, .8, .5, .5, 10, 1]
-#xub = [30.0, .5, .15]
+#xlb = [10.0, -.8, -.5, -.5, .0,  -1.]
+xlb = [10.0, -.5, -.15]
+#xub = [30.0, .8, .5, .5, 10, 1]
+xub = [30.0, .5, .15]
 
-N = 50 # Number of training data
+N = 150 # Number of training data
 
 # Create simulation model
 model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R_n)
@@ -172,9 +172,14 @@ X_test, Y_test = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 
 
 
+gp = GP(X, Y, ulb=ulb, uub=uub, optimizer_opts=solver_opts, normalize=True)
+gp.save_model('gp_car_150_reduzed_normalized_latin')
+#gp = GP.load_model('gp_car_150_reduzed_normalized_latin')
+gp.validate(X_test, Y_test)
+
 # Test data
-x0 = np.array([13.89, 0.0, 0.0, 0.0,.0 , 0.0])
-#x0 = np.array([13.89, 0.0, 0.0])
+#x0 = np.array([13.89, 0.0, 0.0, 0.0,.0 , 0.0])
+x0 = np.array([13.89, 0.0, 0.0])
 u0 = [0.0, 0.0]
 cov0 = np.eye(Nx+Nu)
 u_test = np.zeros((20, 2))
@@ -184,7 +189,7 @@ u_test = np.zeros((20, 2))
 #gp.save_model('gp_car')
 #gp = GP.load_model('gp_car')
 #gp.validate(X_test, Y_test)
-#gp.predict_compare(x0, u_test, model)
+gp.predict_compare(x0, u_test, model)
 
 
 # Limits in the MPC problem
@@ -198,11 +203,15 @@ x_sp = np.array([13.89, 0., 0., 0., 0., 0. ])
 slip_min = -4.0 * np.pi / 180
 slip_max = 4.0 * np.pi / 180
 road_bound = 2.0
-car_width = 1.0
-car_length = 10.0
-obs = np.array([[30, .3, 1., 0.2],
-               [80, -0.5, 1., .2],
-               [150, 0., 1., .2]])
+car_width = .5 #1.0
+car_length = 1. #10.0
+obs = np.array([[20, .2, 0.01, 0.01],
+               [50, -0.2, .01, .01],
+               [80, 0.2, .01, .01],
+               [110, -0.2, .01, .01],
+               [140, 0.2, .01, .01],
+               [170, 0.2, .01, .01],
+               ])
 
 
 
@@ -235,17 +244,18 @@ lam = 10
 #X = x[:-1,:]
 #Y = x[1:,:]
 #Z = np.hstack([X, u])
-#Z1 = Z[:50,:]
-#Y1 = Y[ :50,:]
-#Z2 = Z[50:-1,:]
-#Y2 = Y[ 50:-1,:]
+#Z1 = Z[::3,:3]
+#Y1 = Y[::3,:3]
+#Z2 = Z[2::3,:3]
+#Y2 = Y[2::3,:3]
 
 
 ## Create GP model
-#gp = GP(X, Y, ulb=ulb, uub=uub, optimizer_opts=solver_opts, normalize=False)
-#gp.save_model('gp_car')
-#gp = GP.load_model('gp_car')
-#gp.validate(X_test, Y_test)
+#solver_opts['expand']= False
+#gp = GP(Z[:,:3], Y[:,:3], ulb=ulb, uub=uub, optimizer_opts=solver_opts, normalize=True)
+#gp.save_model('gp_car_300_reduzed_normalized')
+##gp = GP.load_model('gp_car')
+#gp.validate(Z2, Y2)
 #gp.predict_compare(x0, u_test, model)
 
 #mpc_gp = MPC(horizon=2*dt, gp=gp, model=model,
