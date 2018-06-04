@@ -207,31 +207,31 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
 #        ub[Nx + 1] = 10**-4
 #
 
-#        lb[:Nx]    = np.sqrt(10**(-3)) #stdX / 10
-#        ub[:Nx]    = np.sqrt(10**(3)) #stdX * 10
-#        lb[Nx]     = np.sqrt(10**(-3)) #stdF / 10
-#        ub[Nx]     = np.sqrt(10**(3)) #stdF * 10
+#        lb[:Nx]    = stdX / 10
+#        ub[:Nx]    = stdX * 10
+#        lb[Nx]     = stdF / 10
+#        ub[Nx]     = stdF * 10
 #        lb[Nx + 1] = 10**-6
 #        ub[Nx + 1] = 10**-4
 
         if hyper_init is None:
 #            hyp_init = pyDOE.lhs(num_hyp, samples=1).flatten()
             hyp_init = np.zeros((num_hyp))
-            hyp_init[:Nx] = 10
-            hyp_init[Nx] = 1
+            hyp_init[:Nx] = np.std(X, 0)
+            hyp_init[Nx] = np.std(Y[output])
             hyp_init[Nx + 1] = 1e-5
 #            hyp_init = hyp_init * (ub - lb) + lb
         else:
             hyp_init = hyper_init[output, :]
 
         if meanFunc is 'const':
-            lb[-1] = meanF / 10 - 1e-8
-            ub[-1] = meanF * 10 + 1e-8
+            lb[-1] = -1e2
+            ub[-1] = 1e2
         elif meanFunc is not 'zero':
             lb[-1] = meanF / 10 -1e-8
             ub[-1] = meanF * 10 + 1e-8
-            lb[-h_m:-1] = -np.inf
-            ub[-h_m:-1] = np.inf
+            lb[-h_m:-1] = -1e-2
+            ub[-h_m:-1] = 1e-2
 
         squaredist = np.zeros((N, N * Nx))
         for i in range(Nx):
@@ -242,7 +242,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
         obj = np.zeros((multistart, 1))
         hyp_opt_loc = np.zeros((multistart, num_hyp))
         lam_x_opt_loc = np.zeros((multistart, num_hyp))
-
+        
         for i in range(multistart):
             solve_time = -time.time()
             if warm_start:
@@ -363,3 +363,6 @@ def standardize(X_original, meanX, stdX):
 def standardize_inverse(X_scaled, meanX, stdX):
     # Scale input and output variables
     return X_scaled * stdX + meanX
+
+
+

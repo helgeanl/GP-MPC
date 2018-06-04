@@ -11,16 +11,16 @@ from __future__ import print_function
 from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
 #path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.1-64bit")
-path.append(r"./GP_MPC/")
+path.append(r"./../")
 
 import numpy as np
 import casadi as ca
 import time
 
-from gp_mpc import Model, GP, MPC
+from gp_mpc import Model, GP, MPC, plot_eig, lqr
 
 
-def ode(x, u, z):
+def ode(x, u, z,p=0.5):
     # Model Parameters
     p = 0.5
 
@@ -43,12 +43,12 @@ def alg(x, z, u):
     Sf = 2.0
 
     alg = [
-             mu1_M * (Sf - x[0] / y1 - x[1] / y2) / 
+             mu1_M * (Sf - x[0] / y1 - x[1] / y2) /
                  (K + (Sf - x[0] / y1 - x[1] / y2)) - z[0],
-             mu2_M * (Sf - x[0] / y1 - x[1] / y2) * K / 
+             mu2_M * (Sf - x[0] / y1 - x[1] / y2) * K /
                  ((K + (Sf - x[0] / y1 - x[1] / y2)) * (K_I + x[2])) - z[1]
             ]
-    
+
     return ca.vertcat(*alg)
 
 def alg_0(x, u):
@@ -62,12 +62,12 @@ def alg_0(x, u):
     Sf = 2.0
 
     alg = [
-             mu1_M * (Sf - x[0] / y1 - x[1] / y2) / 
+             mu1_M * (Sf - x[0] / y1 - x[1] / y2) /
                  (K + (Sf - x[0] / y1 - x[1] / y2)),
-             mu2_M * (Sf - x[0] / y1 - x[1] / y2) * K / 
+             mu2_M * (Sf - x[0] / y1 - x[1] / y2) * K /
                  ((K + (Sf - x[0] / y1 - x[1] / y2)) * (K_I + x[2]))
             ]
-    
+
     return ca.vertcat(*alg)
 
 
@@ -82,7 +82,7 @@ def inequality_constraints(x, covar, u, eps):
                 con_ineq_ub=con_ineq_ub
     )
     return cons
-    
+
 
 
 solver_opts = {
@@ -96,7 +96,7 @@ dt = .1
 Nx = 3
 Nu = 2
 Nz = 2
-R = np.eye(Nx) * 1e-5 
+R = np.eye(Nx) * 1e-5
 
 # Limits in the training data
 ulb = [0., 0.]
@@ -104,22 +104,29 @@ uub = [1., .1]
 xlb = [.0, .0, .0]
 xub = [1., 1., 1.]
 
-N = 60 # Number of training data
+N = 10 # Number of training data
 
 # Create simulation model
-model          = Model(Nx=Nx, Nu=Nu, Nz=Nz, ode=ode, alg=alg, alg_0=alg_0, 
+model          = Model(Nx=Nx, Nu=Nu, Nz=Nz, ode=ode, alg=alg, alg_0=alg_0,
                         dt=dt, R=R, clip_negative=True)
 X, Y           = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 X_test, Y_test = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 
+
+
 # Create GP model
-gp = GP(X, Y)
+gp = GP(X, Y, normalize=True)
 gp.validate(X_test, Y_test)
 
 x0 = np.array([.3, .3, .3])
+u0 = np.array([40, 40])
 u_test = np.ones((30, 2)) * .3
 gp.predict_compare(x0, u_test, model)
 model.plot(x0, u_test)
+
+# Linear System
+A, B = model.discrete_linearize(x0, u0)
+plot_eig(A)
 
 ## Limits in the MPC problem
 ulb = [0., 0.]
@@ -130,8 +137,8 @@ x_sp = np.array([.5, .5, .5])
 
 #mpc = MPC(horizon=12*dt, gp=gp, model=model,
 #          gp_method='ME',
-#          ulb=ulb, uub=uub, xlb=xlb, xub=xub, 
-#          terminal_constraint=0, costFunc='quad', feedback=False, 
+#          ulb=ulb, uub=uub, xlb=xlb, xub=xub,
+#          terminal_constraint=0, costFunc='quad', feedback=False,
 #          solver_opts=solver_opts, discrete_method='rk4',
 #          inequality_constraints=None
 #          )
@@ -139,4 +146,3 @@ x_sp = np.array([.5, .5, .5])
 #
 #x, u = mpc.solve(x0, sim_time=15*dt, x_sp=x_sp, debug=False)
 #mpc.plot()
-

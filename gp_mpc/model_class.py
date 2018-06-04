@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Differential-Algebraic Equation Model
+Dynamic System Model
 Copyright (c) 2018, Helge-André Langåker
 """
 
@@ -12,6 +12,7 @@ from __future__ import print_function
 import pyDOE
 import numpy as np
 import casadi as ca
+import scipy.linalg
 import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
 
@@ -37,7 +38,6 @@ class Model:
             opt: Options dict to pass to the IDEAS integrator
             clip_negative: If true, clip negative simulated outputs to zero
         """
-
 
         # Create a default noise covariance matrix
         if R is None:
@@ -73,10 +73,9 @@ class Model:
             self.__alg0 = ca.Function('alg_0', [x, u],
                                       [alg_0(x, u)])
             dae.update({'z':z, 'alg': alg(x, z, u)})
-
-
-        self.Integrator = ca.integrator('Integrator', 'idas', dae, options)
-
+            self.Integrator = ca.integrator('Integrator', 'idas', dae, options)
+        else:
+            self.Integrator = ca.integrator('Integrator', 'cvodes', dae, options)
 
         #TODO: Fix discrete DAE model
         if alg is None:
@@ -89,17 +88,17 @@ class Model:
             xrk4 = x + dt/6*(k1 + 2*k2 + 2*k3 + k4)
             self.rk4 = ca.Function("ode_rk4", [x, u, p], [xrk4])
 
-        # Jacobian of continuous system
-        self.__jac_x = ca.Function('jac_x', [x, u, p],
-                                   [ca.jacobian(ode_casadi(x,u,p), x)])
-        self.__jac_u = ca.Function('jac_x', [x, u, p],
-                                   [ca.jacobian(ode_casadi(x,u,p), u)])
+            # Jacobian of continuous system
+            self.__jac_x = ca.Function('jac_x', [x, u, p],
+                                       [ca.jacobian(ode_casadi(x,u,p), x)])
+            self.__jac_u = ca.Function('jac_x', [x, u, p],
+                                       [ca.jacobian(ode_casadi(x,u,p), u)])
 
-        # Jacobian of discrete RK4 system
-        self.__discrete_rk4_jac_x = ca.Function('jac_x', [x, u, p],
-                                    [ca.jacobian(self.rk4(x,u,p), x)])
-        self.__discrete_rk4_jac_u = ca.Function('jac_x', [x, u, p],
-                                    [ca.jacobian(self.rk4(x,u,p), u)])
+            # Jacobian of discrete RK4 system
+            self.__discrete_rk4_jac_x = ca.Function('jac_x', [x, u, p],
+                                        [ca.jacobian(self.rk4(x,u,p), x)])
+            self.__discrete_rk4_jac_u = ca.Function('jac_x', [x, u, p],
+                                        [ca.jacobian(self.rk4(x,u,p), u)])
 
         # Jacobian of exact discretization
         self.__discrete_jac_x = ca.Function('jac_x', [x, u, p],
@@ -148,6 +147,47 @@ class Model:
         Ad = np.array(self.__discrete_rk4_jac_x(x0, u0, p0))
         Bd = np.array(self.__discrete_rk4_jac_u(x0, u0, p0))
         return Ad, Bd
+    
+    def rk4_jacobian(self, x0, u0, p0=[]):
+        """ Linearize the discrete rk4 system around the operating point
+            x[k+1] = Ax[k] + Bu[k]
+        # Arguments:
+            x0: State vector
+            u0: Input vector
+            p0: Parameter vector (optional)
+        """
+        return self.__discrete_rk4_jac_x(x0, u0, p0)
+    
+    def check_rk4_stability(self, x0, u0, d=.1, plot=False):
+        """ Check if Runga Kutta 4 method is stable around operating point
+        
+        # Return True if stable, False if not stable
+        """
+        A, B = self.linearize(x0, u0, p0=[])
+        eigenvalues, eigenvec = scipy.linalg.eig(A)
+        h = self.sampling_time()
+        for eig in eigenvalues:
+            R = 1 + h*eig + (h*eig)**2/2 + (h*eig)**3/6 + (h*eig)**4/24
+            if np.abs(R) >= 1:
+                return False
+#        if plot:
+#            h = d
+##            N = 1000;
+##            th = np.linspace(0, 2*np.pi, N);
+##            r = np.exp(1j*th);
+##            f = lambda r: 1 + h*r + (h*r)**2/2 + (h*r)**3/6 + (h*r)**4/24
+#            plt.figure()
+#            x = np.arange(-3.0, 3.0, 0.01)
+#            y = np.arange(-3.0, 3.0, 0.01)
+#            X, Y = np.meshgrid(x, y)
+#            print(h)
+#            z = X + 1j*Y;
+#            R = 1 + h*z + (h*z)**2/2 + (h*z)**3/6 + (h*z)**4/24
+#            print(R.shape)
+#            zlevel4 = abs(R);
+#            plt.contour(x,y, zlevel4)
+#            plt.show()
+        return True
 
 
     def sampling_time(self):
@@ -185,11 +225,9 @@ class Model:
             out = self.Integrator(x0=x0, p=par)
         return np.array(out["xf"]).flatten()
 
-
+#TODO: Fix this or remove
     def set_method(self, method='exact'):
         """ Select wich discrete time method to use """
-
-
 
 
     def sim(self, x0, u, p=None, noise=False):
@@ -264,17 +302,18 @@ class Model:
         xub = np.array(xub)
         xlb = np.array(xlb)
 
-
         # Predefine matrix to collect noisy state outputs
         Y = np.zeros((N, self.__Nx))
 
         # Create control input design using a latin hypecube
         # Latin hypercube design for unit cube [0,1]^Nu
-        U = pyDOE.lhs(self.__Nu, samples=N, criterion='maximin')
-
-        # Scale control inputs to correct range
-        for k in range(N):
-            U[k, :] = U[k, :] * (uub - ulb) + ulb
+        if self.__Nu > 0:
+            U = pyDOE.lhs(self.__Nu, samples=N, criterion='maximin')
+             # Scale control inputs to correct range
+            for k in range(N):
+                U[k, :] = U[k, :] * (uub - ulb) + ulb
+        else:
+            U = []
 
         # Create state input design using a latin hypecube
         # Latin hypercube design for unit cube [0,1]^Ny
@@ -290,9 +329,11 @@ class Model:
             for k in range(N):
                 par[k, :] = par[k, :] * (pub - plb) + plb
 
-
         for i in range(N):
-            u_t = U[i, :]    # control input for simulation
+            if self.__Nu > 0:
+                u_t = U[i, :]    # control input for simulation
+            else:
+                u_t = []
             x_t = X[i, :]    # state input for simulation
             p_t = par[i, :]    # parameter input for simulation
 
@@ -305,7 +346,10 @@ class Model:
                                 np.zeros((self.__Nx)), self.__R)
 
         # Concatenate previous states and inputs to obtain overall input to GP model
-        Z = np.hstack([X, U])
+        if self.__Nu > 0:
+            Z = np.hstack([X, U])
+        else:
+            Z = X
         return Z, Y
 
 
@@ -329,9 +373,7 @@ class Model:
             ax.set_ylabel('x_' + str(i + 1))
             ax.set_xlabel('Time')
         fig_x.canvas.set_window_title('Model simulation')
-
-
-
+        plt.show()
 
 
     def predict_compare(self, x0, u, num_cols=2, xnames=None, title=None,):
@@ -383,8 +425,8 @@ class Model:
             ax = fig.add_subplot(num_rows, num_cols, i + 1)
             ax.plot(t, y_exact[:, i], 'b-', label='Exact')
             ax.plot(t, y_rk4[:, i], 'r-', label='RK4')
-            ax.plot(t, y_lin[:, i], 'g--', label='Linearized')
-            ax.plot(t, y_lin[:, i], 'y--', label='Linearized RK4')
+#            ax.plot(t, y_lin[:, i], 'g--', label='Linearized')
+#            ax.plot(t, y_lin[:, i], 'y--', label='Linearized RK4')
             ax.set_ylabel(xnames[i])
             ax.legend(prop=fontP, loc='best')
             ax.set_xlabel('Time')

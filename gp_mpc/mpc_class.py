@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Gaussian Process functions
+Model Predictive Control with Gaussian Process
 Copyright (c) 2018, Helge-André Langåker
 """
 from __future__ import absolute_import
@@ -21,7 +21,8 @@ class MPC:
                  Q=None, P=None, R=None, S=None, lam=None,
                  ulb=None, uub=None, xlb=None, xub=None, terminal_constraint=None,
                  feedback=True, gp_method='TA', costFunc='quad', solver_opts=None,
-                 discrete_method='gp', inequality_constraints=None, num_con_par=0
+                 discrete_method='gp', inequality_constraints=None, num_con_par=0,
+                 hybrid=None, Bd=None
                  ):
 
         """ Initialize and build the MPC solver
@@ -138,13 +139,15 @@ class MPC:
         """ Select wich GP function to use """
         if discrete_method is 'gp':
             self.__gp.set_method(gp_method)
-
+#TODO:Fix
         if solver_opts['expand'] is not False and discrete_method is 'exact':
-            raise NameError("Can't use exact discrete system with expanded graph")
+            print("Expand don't work with CVODES intagrator")
+#            raise NameError("Can't use exact discrete system with expanded graph")
 
         # Initialize state variance with the GP noise variance
         if gp is not None:
-            self.__variance_0 = gp.noise_variance()
+            #TODO: Fix
+            self.__variance_0 = np.full((Ny), 1e-8) #gp.noise_variance()
         else:
             self.__variance_0 = np.full((Ny), 0)
             print('var_0')
@@ -158,7 +161,7 @@ class MPC:
         v_s = ca.MX.sym('v', Nu)
         if feedback:
             u_func = ca.Function('u', [mean_s, v_s, K_s],
-                                 [v_s + ca.mtimes(K_s.reshape((Nu, Ny)), mean_s)])
+                                 [v_s - ca.mtimes(K_s.reshape((Nu, Ny)), mean_s)])
         else:
             u_func = ca.Function('u', [mean_s, v_s, K_s], [v_s])
         self.__u_func = u_func
@@ -223,7 +226,10 @@ class MPC:
 
         cholesky = ca.Function('cholesky', [covar_x_sx], [ca.chol(covar_x_sx).T])
 
-
+        #TODO: sdf
+        """ Fix hybrid model """
+        f = hybrid
+        
         """ Build constraints """
         for t in range(Nt):
             # Input to GP
@@ -240,7 +246,25 @@ class MPC:
             elif discrete_method is 'exact':
                 mean_next_pred = model.Integrator(x0=mean_t, p=u_t)['xf']
                 covar_x_next_pred = ca.MX(Ny, Ny)
-            else:
+            elif discrete_method is 'hybrid':
+                #TODO: Clean up this...
+                mean_d, covar_d = self.__gp.predict(mean_t[:3], u_t, covar_t[:5,:5])
+                mean_next_pred = ca.diag([0,0,0,1,1,1]) @ f.rk4(mean_t, u_t, []) + Bd @ mean_d
+#                mean_next_pred = f.Integrator(x0=mean_t, p=u_t)['xf'] + Bd @ mean_d
+#                jac_f = f.rk4_jacobian(mean_t, u_t)
+#                jac_mean = ca.MX(3,6)
+#                jac_mean[:3,:3] = self.__gp.jacobian(mean_t[:3], u_t, covar_t[:5,:5])
+#                A = ca.horzcat(jac_f, Bd)
+#                temp = jac_mean @ covar_x_t
+#                temp_mat = ca.MX(6+3, 6+3)
+#                temp_mat[0:6,:6] = covar_x_t
+#                temp_mat[6:,6:] = covar_d
+#                temp_mat[6:,:6] = temp
+#                temp_mat[:6, 6:] = temp.T
+#                covar_x_next_pred = A @ temp_mat @ A.T
+                covar_x_next_pred = ca.MX(Ny, Ny)
+                
+            else: # Use GP as default
                 mean_next_pred, covar_x_next_pred = self.__gp.predict(mean_t, u_t, covar_t)
 
             S = cholesky(covar_x_next_pred)
@@ -314,7 +338,7 @@ class MPC:
             'ipopt.warm_start_slack_bound_frac' : 1e-9,
             'ipopt.warm_start_slack_bound_push' : 1e-9,
             'ipopt.warm_start_mult_bound_push' : 1e-9,
-#            'ipopt.mu_strategy' : 'adaptive',
+            'ipopt.mu_strategy' : 'adaptive',
             'print_time' : False,
             'verbose' : False,
             'expand' : True
@@ -382,7 +406,8 @@ class MPC:
 
         self.__mean[0]       = x0
         self.__mean_pred[0]  = x0
-        self.__covariance[0] = np.diag(self.__variance_0)
+        #TODO: Fix
+        self.__covariance[0] = 0 #np.diag(self.__variance_0)
         self.__u[0]          = u0
 
         # Initial guess of the warm start variables
@@ -398,6 +423,8 @@ class MPC:
                 Ad, Bd = self.__model.discrete_linearize(x0, u0)
             elif self.__discrete_method is 'rk4':
                 Ad, Bd = self.__model.discrete_rk4_linearize(x0, u0)
+            elif self.__discrete_method is 'hybrid':
+                Ad, Bd = self.__model.discrete_rk4_linearize(x0, u0)
             elif self.__discrete_method is 'gp':
                 Ad, Bd = self.__gp.discrete_linearize(x0, u0, np.eye(self.__Nx)*1e-2)
             K, S, E = lqr(Ad, Bd, self.__Q, self.__R)
@@ -408,8 +435,13 @@ class MPC:
         print('\nSolving MPC with %d step horizon' % Nt)
         for t in range(self.__Nsim):
             solve_time = -time.time()
-
-            """ Initial values """
+            
+            # Test if RK4 is stable for given initial state
+            if self.__discrete_method is 'rk4':
+                if not self.__model.check_rk4_stability(x0,u0):
+                    print('-- WARNING: RK4 is not stable! --')
+            
+            """ Update Initial values with measurment"""
             self.__var_init['mean', 0]  = self.__mean[t]
 
             # Get constraint parameters
@@ -457,7 +489,7 @@ class MPC:
             self.__u[t, :] = np.array(self.__u_func(self.__mean[t, :], v, K.flatten())).flatten()
             self.__mean_pred[t + 1] = np.array(optvar['mean', 1]).flatten()
             self.__covariance[t + 1] = np.array(optvar['covariance', 1].reshape((Ny, Ny)))
-
+            
             if debug:
                 self.__debug(t)
 
@@ -470,6 +502,10 @@ class MPC:
                 print('** System unstable, simulator crashed **')
                 print('----------------------------------------')
                 return self.__mean, self.__u
+            
+            """Initial values for next iteration"""
+            x0 = self.__mean[t + 1]
+            u0 = self.__u[t]
         return self.__mean, self.__u
 
 
@@ -714,15 +750,15 @@ def lqr(A, B, Q, R):
 
     # Returns:
         K: LQR gain matrix
-        S: Solution to the Riccati equation
+        P: Solution to the Riccati equation
         E: Eigenvalues of the closed loop system
     """
 
-    S = np.array(scipy.linalg.solve_discrete_are(A, B, Q, R))
-    K = np.array(scipy.linalg.inv(B.T @ S @ B + R) @ (B.T @ S @ A))
+    P = np.array(scipy.linalg.solve_discrete_are(A, B, Q, R))
+    K = -np.array(scipy.linalg.solve(R + B.T @ P @ B, B.T @ P @ A))
     eigenvalues, eigenvec = scipy.linalg.eig(A - B @ K)
 
-    return K, S, eigenvalues
+    return K, P, eigenvalues
 
 
 def plot_eig(A, discrete=True):
@@ -738,4 +774,5 @@ def plot_eig(A, discrete=True):
     plt.gca().set_aspect('equal', adjustable='box')
 
     fig.canvas.set_window_title('Eigenvalues of linearized system')
+    plt.show()
     return eigenvalues

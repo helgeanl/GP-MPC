@@ -210,8 +210,8 @@ def gp(invK, X, Y, hyper, inputmean,  alpha=None, meanFunc='zero', log=False):
         mean_func = ca.Function('mean', [ks_s, alpha_s],
                            [ca.mtimes(ks_s.T, alpha_s)])
     else:
-        mean_func = ca.Function('mean', [ksT_invK_s, Y_s, m_s],
-                           [ca.mtimes(ksT_invK_s, Y_s - m_s) + m_s])
+        mean_func = ca.Function('mean', [ksT_invK_s, Y_s],
+                           [ca.mtimes(ksT_invK_s, Y_s)])
 
     var_func  = ca.Function('var', [kss_s, ksT_invK_s, ks_s],
                             [kss_s - ca.mtimes(ksT_invK_s, ks_s)])
@@ -230,7 +230,7 @@ def gp(invK, X, Y, hyper, inputmean,  alpha=None, meanFunc='zero', log=False):
         if alpha is not None:
             mean[output] = mean_func(ks, ca.MX(alpha[output]))
         else:
-            mean[output] = mean_func(ksT_invK, Y[:, output], m(inputmean))
+            mean[output] = mean_func(ksT_invK, Y[:, output])
         var[output] = var_func(kss, ks, ksT_invK)
 
     if log:

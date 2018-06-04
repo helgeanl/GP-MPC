@@ -11,12 +11,40 @@ from __future__ import print_function
 from sys import path
 path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
 #path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.1-64bit")
-path.append(r"./GP_MPC/")
+path.append(r"./../")
 
 import numpy as np
 import casadi as ca
-
+import matplotlib.pyplot as plt
 from gp_mpc import Model, GP, MPC, plot_eig, lqr
+
+def plot_feedback():
+    Nt = 20
+    x0 = np.array([-4., 1.])
+    cov = np.zeros((2,2))
+    x = np.zeros((Nt,2))
+    x_sim = np.zeros((Nt,2))
+    #x_rk4 = np.zeros((Nt,2))
+    
+    x[0] = x0
+    x_sim[0] = x0
+    #x_rk4[0] = x0
+    for i in range(Nt-1):
+        x_t, cov = gp.predict(x[i], [], cov)
+        x[i + 1] = np.array(x_t).flatten()
+        x_sim[i+1] = model.integrate(x0=x_sim[i], u=[], p=[])
+    #    x_rk4[i+1] = np.array(model.rk4(x_rk4[i], [],[])).flatten()
+    
+    plt.figure()
+    ax = plt.subplot(111)
+    ax.plot(x_sim[:,0], x_sim[:,1], 'k-', linewidth=1.0, label='Exact')
+    ax.plot(x[:,0], x[:,1], 'b-', linewidth=1.0, label='GP')
+    #ax.plot(x_rk4[:,0], x_rk4[:,1], 'g--', linewidth=1.0, label='RK4')
+    ax.set_ylabel('y')
+    ax.set_xlabel('x')
+    plt.legend(loc='best')
+    plt.show()
+
 
 
 def ode(x, u, z, p):
@@ -43,6 +71,7 @@ def ode(x, u, z, p):
     ]
     
     return  ca.vertcat(*dxdt)
+
 
 
 def inequality_constraints(x, covar, u, eps):
@@ -77,29 +106,21 @@ uub = [60., 60.]
 xlb = [.0, .0, .0, .0]
 xub = [30., 30., 30., 30.]
 
-N = 40 # Number of training data
+N = 10 # Number of training data
 
 # Create simulation model
 model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R, clip_negative=True)
 X, Y           = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
-X_test, Y_test = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
+X_test, Y_test = model.generate_training_data(N*10, uub, ulb, xub, xlb, noise=True)
 
 # Create GP model
-#gp = GP(X, Y, mean_func=meanFunc, normalize=True, xlb=xlb, xub=xub, ulb=ulb, 
-#        uub=uub, optimizer_opts=solver_opts)
+gp = GP(X, Y, mean_func=meanFunc, normalize=False, xlb=xlb, xub=xub, ulb=ulb, 
+        uub=uub, optimizer_opts=solver_opts, multistart=1)
+print(gp._GP__hyper)
 #gp.save_model('gp_tank')
-gp = GP.load_model('gp_tank')
+#gp = GP.load_model('gp_tank')
 gp.validate(X_test, Y_test)
 
-
-x0 = np.array([8., 10., 8., 18.])
-u0 = np.array([45, 34])
-u_test = np.full((20, 2), [35, 56]) 
-#gp.predict_compare(x0, u_test, model)
-
-
-#model.predict_compare(x0,u_test)
-#model.plot(x0, u_test)
 
 # Limits in the MPC problem
 ulb = [10., 10.]
@@ -107,6 +128,9 @@ uub = [60., 60.]
 xlb = [5.0, 5.0, 5.0, 5.0] 
 xub = [30., 30., 30., 30.]
 x_sp = np.array([14., 14., 14.2, 21.3])
+x0 = np.array([8., 10., 8., 18.])
+u0 = np.array([45, 34])
+u_test = np.full((20, 2), [35, 56]) 
 
 Q = np.array([[1, 0, 0, 0],
               [0, 1, 0, 0],
@@ -116,8 +140,18 @@ P = np.array([[5, 0, 0, 0],
               [0, 5, 0, 0],
               [0, 0, 5, 0],
               [0, 0, 0, 5]])
-R = np.diag([.0, .0])
+R = np.diag([.01, .01])
 S = np.diag([.01, .01]) 
+model.check_rk4_stability(x0,u0)
+
+gp.predict_compare(x0, u_test, model, feedback=False, x_ref=x_sp, Q=Q, R=R)
+gp.predict_compare(x0, u_test, model, feedback=True, x_ref=x_sp, Q=Q, R=R)
+
+#gp.update_data(X_test, Y_test, int(N*2))
+#gp.predict_compare(x0, u_test, model)
+#model.predict_compare(x0,u_test)
+#model.plot(x0, u_test)
+
 
 mpc = MPC(horizon=10*dt, gp=gp, model=model,
           gp_method='TA',
@@ -130,10 +164,10 @@ mpc = MPC(horizon=10*dt, gp=gp, model=model,
 
 x, u = mpc.solve(x0, u0=u0,sim_time=20*dt, x_sp=x_sp, debug=False, noise=False)
 mpc.plot()
-
-A, B = model.discrete_rk4_linearize(x0, u0)
-K, S, E = lqr(A, B, Q, R)
-Ad, Bd = gp.discrete_linearize(x0, u0, np.eye(6)*1e-5)
-Kd, Sd, Ed = lqr(Ad, Bd, Q, R)
+#
+#A, B = model.discrete_rk4_linearize(x0, u0)
+#K, S, E = lqr(A, B, Q, R)
+#Ad, Bd = gp.discrete_linearize(x0, u0, np.eye(6)*1e-5)
+#Kd, Sd, Ed = lqr(Ad, Bd, Q, R)
 #plot_eig(A)
 #eig = plot_eig(A - B @ K)
