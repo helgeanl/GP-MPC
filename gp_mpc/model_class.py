@@ -73,9 +73,9 @@ class Model:
             self.__alg0 = ca.Function('alg_0', [x, u],
                                       [alg_0(x, u)])
             dae.update({'z':z, 'alg': alg(x, z, u)})
-            self.Integrator = ca.integrator('Integrator', 'idas', dae, options)
+            self.Integrator = ca.integrator('DEA_Integrator', 'idas', dae, options)
         else:
-            self.Integrator = ca.integrator('Integrator', 'cvodes', dae, options)
+            self.Integrator = ca.integrator('ODE_Integrator', 'cvodes', dae, options)
 
         #TODO: Fix discrete DAE model
         if alg is None:

@@ -173,7 +173,7 @@ class MPC:
                 ctools.entry('covariance', shape=(Ny * Ny,), repeat=Nt + 1),
                 ctools.entry('v', shape=(Nu,), repeat=Nt),
 #                ctools.entry('sparse', shape=(Ny * Ny,), repeat=Nt + 1),
-                ctools.entry('eps', repeat=Nt),
+                ctools.entry('eps', repeat=Nt + 1),
         )])
         self.__var = var
         self.__num_var = var.size
@@ -183,7 +183,7 @@ class MPC:
         self.__varub = var(np.inf)
 
         """ Adjust hard boundries """
-        for t in range(Nt):
+        for t in range(Nt + 1):
             for i in range(Ny):
                 # Lower boundry of diagonal
                 self.__varlb['covariance', t, i + i*Ny] = 0

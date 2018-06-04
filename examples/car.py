@@ -204,7 +204,7 @@ solver_opts = {}
 solver_opts['ipopt.linear_solver'] = 'ma27'
 solver_opts['ipopt.max_cpu_time'] = 2
 #solver_opts['ipopt.max_iter'] = 75
-solver_opts['expand']= True
+solver_opts['expand']= False
 solver_opts['ipopt.expect_infeasible_problem'] = 'yes'
 #solver_opts['print_time'] = True
 #solver_opts['ipopt.print_level'] = 5
@@ -242,7 +242,7 @@ gp.validate(X_test, Y_test)
 
 # Create hybrid model
 Nx = 6
-R_n = np.diag([1e-5, 1e-8, 1e-8, 1e-8, 1e-8, 1e-8])
+R_n = np.diag([1e-5, 1e-7, 1e-7, 1e-7, 1e-7, 1e-7])
 model_hybrid   = Model(Nx=Nx, Nu=Nu, ode=ode_hybrid, dt=dt, R=R_n)
 model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R_n)
 
@@ -301,7 +301,7 @@ Bd = np.vstack([np.eye(3), np.zeros((3,3))])
 #gp.predict_compare(x0, u_test, model, feedback=False, x_ref=x_sp, Q=Q, R=R)
 #gp.predict_compare(x0, u_test, model, feedback=True, x_ref=x_sp, Q=Q, R=R)
 
-mpc = MPC(horizon=20*dt, model=model,gp=gp, hybrid=model_hybrid, Bd = Bd,
+mpc = MPC(horizon=2*dt, model=model,gp=gp, hybrid=model_hybrid, Bd = Bd,
           discrete_method='hybrid', gp_method='TA',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
           terminal_constraint=None, costFunc='quad', feedback=False,
