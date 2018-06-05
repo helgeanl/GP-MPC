@@ -171,8 +171,9 @@ class MPC:
         var = ctools.struct_symMX([(
                 ctools.entry('mean', shape=(Ny,), repeat=Nt + 1),
                 ctools.entry('covariance', shape=(Ny * Ny,), repeat=Nt + 1),
+                ctools.entry('L', shape=(int((Ny**2 - Ny)/2 + Ny),), repeat=Nt + 1),
+#                ctools.entry('D', shape=(Ny,), repeat=Nt + 1),
                 ctools.entry('v', shape=(Nu,), repeat=Nt),
-#                ctools.entry('sparse', shape=(Ny * Ny,), repeat=Nt + 1),
                 ctools.entry('eps', repeat=Nt + 1),
         )])
         self.__var = var
@@ -184,9 +185,14 @@ class MPC:
 
         """ Adjust hard boundries """
         for t in range(Nt + 1):
+            j = Ny
+            k = 0
             for i in range(Ny):
                 # Lower boundry of diagonal
                 self.__varlb['covariance', t, i + i*Ny] = 0
+                self.__varlb['L', t, k] = 0
+                k += j
+                j -= 1
             self.__varlb['eps', t] = 0
             if xub is not None:
                 self.__varub['mean', t] = xub
@@ -214,6 +220,25 @@ class MPC:
         covar_func = ca.Function('covar', [covar_x_s], [covar_s])
 
 
+        """ Hybrid output covariance matrix """
+        covar_d_s = ca.MX.sym('covar_d', 3, 3)
+        covar_x_s = ca.MX.sym('covar_x', Ny, Ny)
+        mean_s    = ca.MX.sym('mean', Ny)
+        u_s       = ca.MX.sym('u', Nu)
+        jac_f     = hybrid.rk4_jacobian(mean_s, u_s)
+        jac_mean  = ca.MX(3, Ny)
+        jac_mean[:3,:3] = self.__gp.jacobian(mean_s[:3], u_s, 0)
+        A = ca.horzcat(jac_f, Bd)
+        temp = jac_mean @ covar_x_s
+        temp_mat = ca.MX(Ny + 3, Ny + 3)
+        temp_mat[:Ny,:Ny] = covar_x_s
+        temp_mat[Ny:, Ny:] = covar_d_s
+        temp_mat[Ny:, :Ny] = temp
+        temp_mat[:Ny, Ny:] = temp.T
+        covar_x_next_func = ca.Function( 'cov', [mean_s, u_s, covar_d_s, covar_x_s],
+#                                        [A @ temp_mat @ A.T])
+                                        [covar_x_s])
+
         """ Set initial values """
         obj = ca.MX(0)
         con_eq = []
@@ -226,8 +251,7 @@ class MPC:
 
         cholesky = ca.Function('cholesky', [covar_x_sx], [ca.chol(covar_x_sx).T])
 
-        #TODO: sdf
-        """ Fix hybrid model """
+        #TODO: Fix hybrid model 
         f = hybrid
         
         """ Build constraints """
@@ -235,35 +259,29 @@ class MPC:
             # Input to GP
             mean_t = var['mean', t]
             u_t = u_func(mean_t, var['v', t], K_s)
-
-            covar_x_t = var['covariance', t].reshape((Ny, Ny))
+            
+            L_x = ca.MX(ca.Sparsity.lower(Ny), var['L', t])
+#            covar_x_t = var['covariance', t].reshape((Ny, Ny))
+            covar_x_t = L_x @ L_x.T
             covar_t = covar_func(covar_x_t)
 
-            # Choose between GP and RK4 for next step
+            # Choose which integrator to use
             if discrete_method is 'rk4':
                 mean_next_pred = model.rk4(mean_t, u_t,[])
                 covar_x_next_pred = ca.MX(Ny, Ny)
             elif discrete_method is 'exact':
                 mean_next_pred = model.Integrator(x0=mean_t, p=u_t)['xf']
                 covar_x_next_pred = ca.MX(Ny, Ny)
+            elif discrete_method is 'd-hybrid':
+                #TODO: Clean up this...
+                mean_d, covar_d = self.__gp.predict(mean_t[:3], u_t, covar_t[:5,:5])
+                mean_next_pred = ca.diag([0,0,0,1,1,1]) @ f.rk4(mean_t, u_t, []) + Bd @ mean_d
+                covar_x_next_pred = ca.MX(Ny, Ny)
             elif discrete_method is 'hybrid':
                 #TODO: Clean up this...
                 mean_d, covar_d = self.__gp.predict(mean_t[:3], u_t, covar_t[:5,:5])
                 mean_next_pred = ca.diag([0,0,0,1,1,1]) @ f.rk4(mean_t, u_t, []) + Bd @ mean_d
-#                mean_next_pred = f.Integrator(x0=mean_t, p=u_t)['xf'] + Bd @ mean_d
-#                jac_f = f.rk4_jacobian(mean_t, u_t)
-#                jac_mean = ca.MX(3,6)
-#                jac_mean[:3,:3] = self.__gp.jacobian(mean_t[:3], u_t, covar_t[:5,:5])
-#                A = ca.horzcat(jac_f, Bd)
-#                temp = jac_mean @ covar_x_t
-#                temp_mat = ca.MX(6+3, 6+3)
-#                temp_mat[0:6,:6] = covar_x_t
-#                temp_mat[6:,6:] = covar_d
-#                temp_mat[6:,:6] = temp
-#                temp_mat[:6, 6:] = temp.T
-#                covar_x_next_pred = A @ temp_mat @ A.T
-                covar_x_next_pred = ca.MX(Ny, Ny)
-                
+                covar_x_next_pred = covar_x_next_func(mean_t, u_t, covar_d, covar_x_t)
             else: # Use GP as default
                 mean_next_pred, covar_x_next_pred = self.__gp.predict(mean_t, u_t, covar_t)
 
@@ -271,15 +289,18 @@ class MPC:
 
             # Continuity constraints
             mean_next = var['mean', t + 1]
-            covar_x_next = var['covariance', t + 1]
+#            covar_x_next = var['covariance', t + 1]
+            L_x_next = ca.MX(ca.Sparsity.lower(Ny), var['L', t + 1])
             con_eq.append(mean_next_pred - mean_next )
-            con_eq.append(covar_x_next_pred.reshape((Ny * Ny, 1)) - covar_x_next)
+#            con_eq.append(covar_x_next_pred.reshape((Ny * Ny, 1)) - covar_x_next)
+            covar_x_next = L_x_next @ L_x_next.T
+            con_eq.append(covar_x_next_pred.reshape((Ny * Ny, 1)) - covar_x_next.reshape((Ny*Ny,1)))
 
             # Chance state constraints
-            cons = self.__constraint(mean_next_pred, covar_x_next_pred, Hx, quantile_x, xub, xlb)
-            con_ineq.extend(cons['con'])
-            con_ineq_lb.extend(cons['con_lb'])
-            con_ineq_ub.extend(cons['con_ub'])
+#            cons = self.__constraint(mean_next_pred, covar_x_next_pred, Hx, quantile_x, xub, xlb)
+#            con_ineq.extend(cons['con'])
+#            con_ineq_lb.extend(cons['con_lb'])
+#            con_ineq_ub.extend(cons['con_ub'])
 
             # Input constraints
             cov_u = covar_u_func(covar_x_t, K_s.reshape((Nu, Ny)))
@@ -298,8 +319,9 @@ class MPC:
 
             # Add extra constraints
             if inequality_constraints is not None:
-                cons = inequality_constraints(var['mean', t],
-                                              var['covariance', t],
+                cons = inequality_constraints(var['mean', t + 1],
+#                                              var['covariance', t],
+                                              covar_x_next,
                                               u_t, var['eps', t], con_par)
                 con_ineq.extend(cons['con_ineq'])
                 con_ineq_lb.extend(cons['con_ineq_lb'])
@@ -309,7 +331,8 @@ class MPC:
             u_delta = u_t - u_past
             obj += self.__l_func(var['mean', t], covar_x_t, u_t, cov_u, u_delta) + lam * var['eps', t]
             u_t = u_past
-        obj += self.__lf_func(var['mean', Nt], var['covariance', Nt].reshape((Ny, Ny)))
+#        obj += self.__lf_func(var['mean', Nt], var['covariance', Nt].reshape((Ny, Ny)))
+            obj += self.__lf_func(var['mean', Nt], covar_x_next)
 
         num_eq_con = ca.vertcat(*con_eq).size1()
         num_ineq_con = ca.vertcat(*con_ineq).size1()

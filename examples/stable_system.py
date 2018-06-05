@@ -15,6 +15,7 @@ path.append(r"./../")
 
 import numpy as np
 import casadi as ca
+import pyDOE
 import matplotlib.pyplot as plt
 from gp_mpc import Model, GP, MPC, plot_eig, lqr
 
@@ -96,5 +97,5 @@ print(gp._GP__hyper)
 #gp.save_model('gp_tank')
 #gp = GP.load_model('gp_tank')
 gp.validate(X_test, Y_test)
-plot_system()
+#plot_system()
 

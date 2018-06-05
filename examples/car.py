@@ -202,7 +202,7 @@ def inequality_constraints(x, covar, u, eps, par):
 
 solver_opts = {}
 solver_opts['ipopt.linear_solver'] = 'ma27'
-solver_opts['ipopt.max_cpu_time'] = 2
+solver_opts['ipopt.max_cpu_time'] = 5
 #solver_opts['ipopt.max_iter'] = 75
 solver_opts['expand']= True
 solver_opts['ipopt.expect_infeasible_problem'] = 'yes'
@@ -291,7 +291,7 @@ obs = np.array([[20, .3, 0.01, 0.01],
 # Penalty values
 P = np.diag([.0, 50., 10, .1, 0, 10])
 #Q = np.diag([.0, 5., 1., .01, 0, .1])
-Q = np.diag([.01, 5., 1., .1, 0.0, 1])
+Q = np.diag([.01, 5., 1., .1, 0.01, 1])
 #Q = np.diag([.1, 10., 10.])
 R = np.diag([1, 1])
 S = np.diag([1, 10])
@@ -301,16 +301,16 @@ Bd = np.vstack([np.eye(3), np.zeros((3,3))])
 #gp.predict_compare(x0, u_test, model, feedback=False, x_ref=x_sp, Q=Q, R=R)
 #gp.predict_compare(x0, u_test, model, feedback=True, x_ref=x_sp, Q=Q, R=R)
 
-mpc = MPC(horizon=2*dt, model=model,gp=gp, hybrid=model_hybrid, Bd = Bd,
+mpc = MPC(horizon=20*dt, model=model,gp=gp, hybrid=model_hybrid, Bd = Bd,
           discrete_method='hybrid', gp_method='TA',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
-          terminal_constraint=None, costFunc='quad', feedback=False,
+          terminal_constraint=None, costFunc='quad', feedback=True,
           solver_opts=solver_opts,
           inequality_constraints=inequality_constraints, num_con_par=4
           )
 
 
-x, u = mpc.solve(x0, sim_time=200*dt, x_sp=x_sp, debug=False, noise=False,
+x, u = mpc.solve(x0, sim_time=100*dt, x_sp=x_sp, debug=False, noise=False,
                  con_par_func=constraint_parameters)
 mpc.plot()
 plot_car(x[:, 4], x[:, 5])
