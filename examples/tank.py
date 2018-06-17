@@ -159,7 +159,7 @@ model.check_rk4_stability(x0,u0)
 mpc = MPC(horizon=10*dt, gp=gp, model=model,
           gp_method='TA',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S,
-          terminal_constraint=None, costFunc='quad', feedback=False, 
+          terminal_constraint=None, costFunc='quad', feedback=True, 
           solver_opts=solver_opts, discrete_method='gp',
           inequality_constraints=None
           )

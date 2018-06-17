@@ -196,8 +196,8 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
         ub[:Nx]    = 1e2
         lb[Nx]     = 1e-8
         ub[Nx]     = 1e2
-        lb[Nx + 1] = 10**-6
-        ub[Nx + 1] = 10**-4
+        lb[Nx + 1] = 10**-10
+        ub[Nx + 1] = 10**-2
 
 #        lb[:Nx]    = np.sqrt(10**(-3))
 #        ub[:Nx]    = np.sqrt(10**(3))
@@ -305,13 +305,17 @@ def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc, alpha=None):
                                 gp(invK, ca.MX(X), ca.MX(Y), ca.MX(hyper),
                                    z_s, meanFunc=meanFunc, alpha=alpha))
     loss = 0
+    NLP = 0
 
     for i in range(N):
-        y, var = gp_func(X_test[i, :])
-        loss += (Y_test[i, :] - y)**2
+        mean, var = gp_func(X_test[i, :])
+        loss += (Y_test[i, :] - mean)**2
+        NLP += 0.5*np.log(2*np.pi * (var)) + ((Y_test[i, :] - mean)**2)/(2*var)
+        print(NLP)
+        print(var)
     loss = loss / N
-    standardized_loss = loss/ np.std(Y_test, 0)
-
+    SMSE = loss/ np.std(Y_test, 0)
+    MNLP = NLP / N
     #TODO: Add negative log porability
 
     print('\n________________________________________')
@@ -326,9 +330,13 @@ def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc, alpha=None):
     print('----------------------------------------')
     print('* Standardized mean squared error:')
     for i in range(Ny):
-        print('\t* State %d: %f' % (i + 1, standardized_loss[i]))
+        print('\t* State %d: %f' % (i + 1, SMSE[i]))
     print('----------------------------------------\n')
-    return standardized_loss
+    print('* Mean Negative log Probability:')
+    for i in range(Ny):
+        print('\t* State %d: %f' % (i + 1, MNLP[i]))
+    print('----------------------------------------\n')
+    return SMSE, MNLP
 
 
 """-----------------------------------------------------------------------------

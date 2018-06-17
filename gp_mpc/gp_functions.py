@@ -22,10 +22,17 @@ def covSEard(x, z, ell, sf2):
 
 def get_mean_function(hyper, X, func='zero'):
     """ Get mean function
+    
+    # Arguments:
+        hyper: Matrix with hyperperameters.
+        X: Input vector or matrix.
+        func: Option for mean function:
                 'zero':       m = 0
                 'const':      m = a
                 'linear':     m(x) = aT*x + b
                 'polynomial': m(x) = aT*x^2 + bT*x + c
+    # Returns:
+         CasADi mean function [m(X, hyper)]
     """
 
     Nx, N = X.shape
@@ -72,7 +79,8 @@ def build_gp(invK, X, hyper, alpha, chol, meanFunc='zero'):
 
     # Returns
         mean:     GP mean casadi function [mean(z)]
-        covar:    GP covariance casadi function [covar(z)]
+        var:      GP variance casadi function [var(z)]
+        covar:    GP covariance casadi function [covar(z) = diag(var(z))]
         mean_jac: Casadi jacobian of the GP mean function [jac(z)]
     """
 
@@ -129,11 +137,12 @@ def build_gp(invK, X, hyper, alpha, chol, meanFunc='zero'):
 
     mean_func  = ca.Function('mean', [z_s], [mean_temp(z_s, X)])
     covar_func = ca.Function('var',  [z_s], [ca.diag(var_temp(z_s, X))])
-
+    var_func = ca.Function('var',  [z_s], [var_temp(z_s, X)])
+    
     mean_jac_z = ca.Function('mean_jac_z', [z_s],
                                       [ca.jacobian(mean_func(z_s), z_s)])
 
-    return mean_func, covar_func, mean_jac_z
+    return mean_func, var_func, covar_func, mean_jac_z
 
 
 def build_TA_cov(mean, covar, jac, Nx, Ny):
