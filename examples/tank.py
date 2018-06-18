@@ -9,8 +9,8 @@ from __future__ import division
 from __future__ import print_function
 
 from sys import path
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
-#path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.1-64bit")
+#path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
+path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.1-64bit")
 path.append(r"./../")
 
 import numpy as np
@@ -66,7 +66,7 @@ def ode(x, u, z, p):
 
     dxdt = [
             (-a1 / A1) * ca.sqrt(2 * g * x[0] + 1e-3) + (a3 / A1 )
-                * ca.sqrt(2 * g * x[2] + 1e-6) + (gamma1 / A1) * u[0],
+                * ca.sqrt(2 * g * x[2] + 1e-3) + (gamma1 / A1) * u[0],
             (-a2 / A2) * ca.sqrt(2 * g * x[1] + 1e-3) + a4 / A2 
                 * ca.sqrt(2 * g * x[3]+ 1e-3) + (gamma2 / A2) * u[1],
             (-a3 / A3) * ca.sqrt(2 * g * x[2] + 1e-3) + (1 - gamma2) / A3 * u[1],
@@ -92,13 +92,13 @@ def inequality_constraints(x, covar, u, eps):
 
 
 solver_opts = {
-                'ipopt.linear_solver' : 'ma27',
-                'ipopt.max_cpu_time' : 2,
+#                'ipopt.linear_solver' : 'ma27',
+                'ipopt.max_cpu_time' : 10,
                 'expand' : True,
 }
 
 meanFunc = 'zero'
-dt = 10.0
+dt = 3.0
 Nx = 4
 Nu = 2
 R = np.eye(Nx) * 1e-5 
@@ -113,16 +113,16 @@ N = 40 # Number of training data
 
 # Create simulation model
 model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R, clip_negative=True)
-#X, Y           = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
-#X_test, Y_test = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
+X, Y           = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
+X_test, Y_test = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 
 # Create GP model
-#gp = GP(X, Y, mean_func=meanFunc, normalize=True, xlb=xlb, xub=xub, ulb=ulb, 
+#gp = GP(X, Y, mean_func=meanFunc, normalize=False, xlb=xlb, xub=xub, ulb=ulb, 
 #        uub=uub, optimizer_opts=solver_opts, multistart=1)
 #gp.update_data(X_test, Y_test, N_new=50)
 #gp.save_model('gp_tank')
 gp = GP.load_model('gp_tank')
-#gp.validate(X_test, Y_test)
+gp.validate(X_test, Y_test)
 
 
 # Limits in the MPC problem
@@ -130,19 +130,13 @@ ulb = [10., 10.]
 uub = [60., 60.]
 xlb = [5.0, 5.0, 5.0, 5.0] 
 xub = [30., 30., 30., 30.]
-x_sp = np.array([14., 14., 14.2, 21.3])
-x0 = np.array([9., 10., 8., 18.])
-u0 = np.array([45, 55])
+x_sp = np.array([14., 13.2, 16.2, 18.2])
+x0 = np.array([10., 11., 12., 13.])
+u0 = np.array([55, 55])
 u_test = np.full((20, 2), [35, 56]) 
 
-Q = np.array([[1, 0, 0, 0],
-              [0, 1, 0, 0],
-              [0, 0, 1, 0],
-              [0, 0, 0, 1]])
-P = np.array([[5, 0, 0, 0],
-              [0, 5, 0, 0],
-              [0, 0, 5, 0],
-              [0, 0, 0, 5]])
+Q = np.diag([1, 1, 1, 1])
+P = np.diag([5, 5, .1, .1])
 R = np.diag([.01, .01])
 S = np.diag([.01, .01]) 
 model.check_rk4_stability(x0,u0)
@@ -156,7 +150,7 @@ model.check_rk4_stability(x0,u0)
 #model.plot(x0, u_test)
 
 
-mpc = MPC(horizon=10*dt, gp=gp, model=model,
+mpc = MPC(horizon=20*dt, gp=gp, model=model,
           gp_method='TA',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S,
           terminal_constraint=None, costFunc='quad', feedback=True, 
@@ -165,7 +159,7 @@ mpc = MPC(horizon=10*dt, gp=gp, model=model,
           )
 
 
-x, u = mpc.solve(x0, u0=u0, sim_time=20*dt, x_sp=x_sp, debug=False, noise=True)
+x, u = mpc.solve(x0, u0=u0, sim_time=80*dt, x_sp=x_sp, debug=False, noise=True)
 mpc.plot()
 #
 #A, B = model.discrete_rk4_linearize(x0, u0)

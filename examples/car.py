@@ -200,21 +200,24 @@ def inequality_constraints(x, covar, u, eps, par):
 
 
 
-solver_opts = {}
-#solver_opts['ipopt.linear_solver'] = 'ma27'
-solver_opts['ipopt.max_cpu_time'] = 100
-#solver_opts['ipopt.max_iter'] = 75
-solver_opts['expand']= True
-
-#solver_opts['print_time'] = True
-#solver_opts['ipopt.print_level'] = 5
 
 
+
+
+""" Model options """
 dt = 0.05
 Nx = 3
 Nu = 2
 R_n = np.diag([1e-5, 1e-8, 1e-8])
 
+
+""" Training data options """
+N = 150 # Number of training data
+N_test = 150
+N_new = 50
+n_train = 0
+n_update = 0
+normalize = False
 
 # Limits in the training data
 ulb = [-.5, -.05]
@@ -222,22 +225,24 @@ uub = [.5, .05]
 xlb = [10.0, -.6, -.2]
 xub = [30.0, .6, .2]
 
-N = 150 # Number of training data
-N_test = 1000
-N_new = 100
-n_train = 0
-n_update = 0
-
 # Create simulation model
 model_gp       = Model(Nx=Nx, Nu=Nu, ode=ode_gp, dt=dt, R=R_n)
 X, Y           = model_gp.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 
-SMSE = np.zeros((n_train + n_update + 1, Nx))
-MNLP = np.zeros((n_train + n_update + 1, Nx))
-normalize = False
+
+""" Create GP model estimating dynamics from car model
+"""
 if 0:
+    solver_opts = {}
+    #solver_opts['ipopt.linear_solver'] = 'ma27'
+    solver_opts['ipopt.max_cpu_time'] = 100
+    #solver_opts['ipopt.max_iter'] = 75
+    solver_opts['expand']= True
+    
     gp = GP(X, Y, ulb=ulb, uub=uub, optimizer_opts=solver_opts, normalize=normalize)
-    X_test, Y_test = model_gp.generate_training_data(N_test, uub, ulb, xub, xlb, noise=False)
+    X_test, Y_test = model_gp.generate_training_data(N_test, uub, ulb, xub, xlb, noise=True)
+    SMSE = np.zeros((n_train + n_update + 1, Nx))
+    MNLP = np.zeros((n_train + n_update + 1, Nx))
     for i in range(n_train):
         SMSE[i], MNLP[i] = gp.validate(X_test, Y_test)
         gp.update_data(X_test, Y_test, N_new=N_new)
@@ -274,10 +279,39 @@ else:
     gp.validate(X_test, Y_test)
 
 
+""" Estimation of model errors using GP and RK4
+"""
+if 0:
+      # Create hybrid model with state integrator
+#    Nx = 6
+#    R_n = np.diag([1e-5, 1e-7, 1e-7, 1e-7, 1e-7, 1e-7])
+#    model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R_n)
+
+    solver_opts = {}
+    #solver_opts['ipopt.linear_solver'] = 'ma27'
+    solver_opts['ipopt.max_cpu_time'] = 100
+    #solver_opts['ipopt.max_iter'] = 75
+    solver_opts['expand']= True    
+    R_n = np.diag([1e-5, 1e-7, 1e-7])
+    X, Y    = model_gp.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
+    Y_error = np.zeros(Y.shape)
+    for i in range(N):
+        Y_error[i] = Y[i] - np.array(model_gp.rk4(X[i,:Nx], X[i,Nx:], [])).flatten()
+
+    gp_error = GP(X, Y_error, ulb=ulb, uub=uub, optimizer_opts=solver_opts, normalize=normalize)
+        
+    gp_error.save_model('gp_car_error_' + str((n_train + n_update)*N_new + N) + '_dt_' + str(dt) + '_normalize_' + str(normalize) + '_reduced_latin')
+else:
+    print('')
+#    gp_error = GP.load_model('gp_car_error_' + str((n_train + n_update)*N_new + N) + '_dt_' + str(dt) + '_normalize_' + str(normalize) + '_reduced_latin')
+#    X_test, Y_test = model_gp.generate_training_data(N_test, uub, ulb, xub, xlb, noise=False)
+
+
+
 
 """ Predict GP open/closed loop
 """
-if 1:
+if 0:
     # Test data
     x0 = np.array([13.89, 0.0, 0.0])
     x_sp = np.array([13.89, 0., 0.001])
@@ -293,7 +327,6 @@ if 1:
     Q = np.diag([.1, 10., 50.])
     R = np.diag([.1, 1])
     
-    Bd = np.vstack([np.eye(3), np.zeros((3,3))])
     xnames = [r'$\dot{x}$', r'$\dot{y}$', r'$\dot{\psi}$']
     
     gp.predict_compare(x0, u_test, model_gp, feedback=False, x_ref=x_sp, Q=Q, R=R, 
@@ -301,23 +334,23 @@ if 1:
     #gp.predict_compare(x0, u_test, model_gp, feedback=True, x_ref=x_sp, Q=Q, R=R, 
     #                   methods = ['TA', 'ME'], num_cols=1, xnames=xnames)
     
-    gp.update_data(X_test, Y_test, N_new=500)
-    X_test, Y_test = model_gp.generate_training_data(N_test, uub, ulb, xub, xlb, noise=False)
-    SMSE, MNLP = gp.validate(X_test, Y_test)
-    gp.predict_compare(x0, u_test, model_gp, feedback=False, x_ref=x_sp, Q=Q, R=R, 
-                       methods = ['TA','ME'], num_cols=1, xnames=xnames)
-    
+   
 
 """ Solve MPC with constraints
 """
-if 0:
+if 1:
     
     # Create hybrid model with state integrator
     Nx = 6
-    R_n = np.diag([1e-5, 1e-7, 1e-7, 1e-7, 1e-7, 1e-7])
+    R_n = np.diag([1e-5, 1e-7, 1e-7, 1e-7, 1e-5, 1e-5])
     model_hybrid   = Model(Nx=Nx, Nu=Nu, ode=ode_hybrid, dt=dt, R=R_n)
     model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R_n)
     
+    solver_opts = {}
+    #solver_opts['ipopt.linear_solver'] = 'ma27'
+    solver_opts['ipopt.max_cpu_time'] = 10
+    #solver_opts['ipopt.max_iter'] = 75
+    solver_opts['expand']= True
     solver_opts['ipopt.expect_infeasible_problem'] = 'yes'
     
     # Constraint parameters
@@ -326,13 +359,13 @@ if 0:
     road_bound = 2.0
     car_width = 1.2  #1.0
     car_length = 5. #10.0
-    #obs = np.array([[20, .3, 0.01, 0.01],
-    #               [60, -0.3, .01, .01],
-    ##               [100, 0.3, .01, .01],
-    #               ])
-    
-    obs = np.array([[-100,2.0,0.01,0.01]
+    obs = np.array([[20, .3, 0.01, 0.01],
+                   [60, -0.3, .01, .01],
+                   [100, 0.3, .01, .01],
                    ])
+    
+#    obs = np.array([[-100,2.0,0.01,0.01]
+#                   ])
     
     # Limits in the MPC problem
     ulb = [-.5, -.034]
@@ -347,35 +380,68 @@ if 0:
     R = np.diag([.1, 1])
     S = np.diag([1, 10])
     lam = 100
-    
+    Af = ca.diag([0,0,0,1,1,1])
+    Bd = np.vstack([np.eye(3), np.zeros((3,3))])
+
     x0 = np.array([13.89, 0.0, 0.0, 0.0,.0 , 0.0])
-    x_sp = np.array([13.89, 0., 0., 0., 100., 0. ])
-    
-    #mpc = MPC(horizon=20*dt, model=model,gp=gp, hybrid=model_hybrid, Bd = Bd,
-    #          discrete_method='hybrid', gp_method='ME',
-    #          ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
-    #          terminal_constraint=None, costFunc='quad', feedback=True,
-    #          solver_opts=solver_opts,
-    #          inequality_constraints=inequality_constraints, num_con_par=4
-    #          )
-    #
-    #
-    #x, u = mpc.solve(x0, sim_time=50*dt, x_sp=x_sp, debug=False, noise=False,
-    #                 con_par_func=constraint_parameters)
-    #mpc.plot()
-    #plot_car(x[:, 4], x[:, 5])
+    x_sp = np.array([13.89, 0., 0., 0., 50., 0. ])
+
+    mpc = MPC(horizon=20*dt, model=model,gp=gp, hybrid=None, Bd=Bd, Af=Af,
+              discrete_method='rk4', gp_method='ME',
+              ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
+              terminal_constraint=None, costFunc='quad', feedback=False,
+              solver_opts=solver_opts,
+              inequality_constraints=inequality_constraints, num_con_par=4
+              )
+
+
+    x, u = mpc.solve(x0, sim_time=200*dt, x_sp=x_sp, debug=False, noise=False,
+                     con_par_func=constraint_parameters)
+    mpc.plot()
+    plot_car(x[:, 4], x[:, 5])
     #u1 = u[:20,:]
     #model.predict_compare(x[0], u1)
     
-    ## Use previous data to train GP
-    #X = x[:-1,:]
-    #Y = x[1:,:]
-    #Z = np.hstack([X, u])
-    #Z1 = Z[::3,:3]
-    #Y1 = Y[::3,:3]
-    #Z2 = Z[2::3,:3]
-    #Y2 = Y[2::3,:3]
     
+    
+#    ## Use previous data to train GP
+#    X = x[:-1,:]
+#    Y = x[1:,:]
+#    Z = np.hstack([X[:,:3], u])
+#    Z1 = Z[:]
+#    Y1 = Y[:,:3]
+#    Z2 = Z[100:]
+#    Y2 = Y[100:,:3]
+    
+#    gp_2 = GP(Z1, Y1, ulb=ulb, uub=uub, optimizer_opts=solver_opts, normalize=normalize)
+#    gp.validate(Z2, Y2)
+##
+    if 0:
+        # Test data
+        x0 = np.array([13.89, 0.0, 0.0])
+        x_sp = np.array([13.89, 0., 0.001])
+        u0 = [0.0, 0.0]
+        
+        cov0 = np.eye(Nx+Nu)
+        t = np.linspace(0,20*dt, 20)
+        #u_test = np.ones((20, 2))* np.array([1e-1, 0.0])
+        u_i = np.sin(0.01*t) * 0
+        u_test = np.vstack([0.5*u_i, 0.02*u_i]).T
+        
+        # Penalty values for LQR
+        Q = np.diag([.1, 10., 50.])
+        R = np.diag([.1, 1])
+        
+        xnames = [r'$\dot{x}$', r'$\dot{y}$', r'$\dot{\psi}$']
+        
+        gp.predict_compare(x0, u_test, model_gp, feedback=False, x_ref=x_sp, Q=Q, R=R, 
+                           methods = ['TA','ME'], num_cols=1, xnames=xnames)
+        gp.predict_compare(x0, u_test, model_gp, feedback=True, x_ref=x_sp, Q=Q, R=R, 
+                           methods = ['TA', 'ME'], num_cols=1, xnames=xnames)
+#        
+#    
+#    
+#    
     
     ## Create GP model
     #solver_opts['expand']= False

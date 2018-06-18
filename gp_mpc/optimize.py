@@ -199,21 +199,6 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
         lb[Nx + 1] = 10**-10
         ub[Nx + 1] = 10**-2
 
-#        lb[:Nx]    = np.sqrt(10**(-3))
-#        ub[:Nx]    = np.sqrt(10**(3))
-#        lb[Nx]     = stdF / 5.
-#        ub[Nx]     = stdF * 5.
-#        lb[Nx + 1] = 10**-6
-#        ub[Nx + 1] = 10**-4
-#
-
-#        lb[:Nx]    = stdX / 10
-#        ub[:Nx]    = stdX * 10
-#        lb[Nx]     = stdF / 10
-#        ub[Nx]     = stdF * 10
-#        lb[Nx + 1] = 10**-6
-#        ub[Nx + 1] = 10**-4
-
         if hyper_init is None:
 #            hyp_init = pyDOE.lhs(num_hyp, samples=1).flatten()
             hyp_init = np.zeros((num_hyp))

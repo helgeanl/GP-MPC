@@ -160,17 +160,17 @@ class MPC:
         mean_s = ca.MX.sym('mean', Ny)
         v_s = ca.MX.sym('v', Nu)
         if feedback:
-            u_func = ca.Function('u', [mean_s, v_s, K_s],
-                                 [v_s + ca.mtimes(K_s.reshape((Nu, Ny)), mean_s)])
+            u_func = ca.Function('u', [mean_s, mean_ref_s, v_s, K_s],
+                                 [v_s + ca.mtimes(K_s.reshape((Nu, Ny)), mean_s-mean_ref_s)])
         else:
-            u_func = ca.Function('u', [mean_s, v_s, K_s], [v_s])
+            u_func = ca.Function('u', [mean_s, mean_ref_s, v_s, K_s], [v_s])
         self.__u_func = u_func
 
 
         """ Create variables struct """
         var = ctools.struct_symMX([(
                 ctools.entry('mean', shape=(Ny,), repeat=Nt + 1),
-                ctools.entry('covariance', shape=(Ny * Ny,), repeat=Nt + 1),
+                ctools.entry('sparse_dummy', shape=(Ny*Ny,), repeat=Nt + 1),
                 ctools.entry('L', shape=(int((Ny**2 - Ny)/2 + Ny),), repeat=Nt + 1),
                 ctools.entry('v', shape=(Nu,), repeat=Nt),
                 ctools.entry('eps', repeat=Nt + 1),
@@ -188,10 +188,7 @@ class MPC:
             k = 0
             for i in range(Ny):
                 # Lower boundry of diagonal
-                #TODO: Clean up
-                self.__varlb['covariance', t, i + i*Ny] = 0
                 self.__varlb['L', t, k] = 0
-#                self.__varub['L', t, k] = 1
                 k += j
                 j -= 1
             self.__varlb['eps', t] = 0
@@ -223,16 +220,19 @@ class MPC:
 
         """ Hybrid output covariance matrix """
         if hybrid is not None:
-            Af = ca.diag([0,0,0,1,1,1])
-            covar_d_s = ca.SX.sym('covar_d', 3, 3)
+            if Af is None:
+                Af = ca.diag([0,0,0,1,1,1])
+            N_gp, Ny_gp, Nu_gp = self.__gp.get_size()
+#            Nz_gp = Ny_gp + Nu_gp
+            covar_d_s = ca.SX.sym('covar_d', Ny_gp, Ny_gp)
             covar_x_s = ca.SX.sym('covar_x', Ny, Ny)
 #            L_x       = ca.SX.sym('L', ca.Sparsity.lower(Ny))
 #            L_d       = ca.SX.sym('L', ca.Sparsity.lower(3))
             mean_s    = ca.SX.sym('mean', Ny)
             u_s       = ca.SX.sym('u', Nu)
             jac_f     = hybrid.rk4_jacobian(mean_s, u_s)
-            jac_mean  = ca.SX(3, Ny)
-            jac_mean[:, :3] = self.__gp.jacobian(mean_s[:3], u_s, 0)
+            jac_mean  = ca.SX(Ny_gp, Ny)
+            jac_mean[:, :Ny_gp] = self.__gp.jacobian(mean_s[:Ny_gp], u_s, 0)
 #            A = ca.horzcat(jac_f, Bd)
             jac = Af @ jac_f + Bd @ jac_mean
             
@@ -243,7 +243,7 @@ class MPC:
 #            cov_i[Ny:, Ny:] = covar_d_s
 #            cov_i[Ny:, :Ny] = temp
 #            cov_i[:Ny, Ny:] = temp.T
-            #TODO: This is just a new TA implementation
+            #TODO: This is just a new TA implementation...
             covar_x_next_func = ca.Function( 'cov', [mean_s, u_s, covar_d_s, covar_x_s],
                                             #TODO: Clean up
 #                                            [A @ cov_i @ A.T])
@@ -264,7 +264,8 @@ class MPC:
         con_ineq_lb = []
         con_ineq_ub = []
         con_eq.append(var['mean', 0] - mean_0_s)
-        con_eq.append(var['covariance', 0] - covariance_0_s)
+        L_0_s = ca.MX(ca.Sparsity.lower(Ny), var['L', 0])
+        con_eq.append(L_to_cov_func(L_0_s).reshape((Ny * Ny,1)) - covariance_0_s)
         #TODO: Fix initialization of covariance
 #        con_eq.append(var['L', 0] - covariance_0_s)
         u_past = u_0_s
@@ -278,7 +279,7 @@ class MPC:
         for t in range(Nt):
             # Input to GP
             mean_t = var['mean', t]
-            u_t = u_func(mean_t, var['v', t], K_s)
+            u_t = u_func(mean_t, mean_ref_s, var['v', t], K_s)
             
             L_x = ca.MX(ca.Sparsity.lower(Ny), var['L', t])
             #TODO: Clean up
@@ -296,12 +297,12 @@ class MPC:
             elif discrete_method is 'd_hybrid':
                 # Deterministic hybrid GP model
                 #TODO: Clean up this...
-                mean_d, covar_d = self.__gp.predict(mean_t[:3], u_t, covar_t[:5,:5])
+                mean_d, covar_d = self.__gp.predict(mean_t[:Ny_gp], u_t, covar_t[:5,:5])
                 mean_next_pred = Af @ f.rk4(mean_t, u_t, []) + Bd @ mean_d
                 covar_x_next_pred = ca.MX(Ny, Ny)
             elif discrete_method is 'hybrid':
                 #TODO: Clean up this...
-                mean_d, covar_d = self.__gp.predict(mean_t[:3], u_t, covar_t[:5,:5])
+                mean_d, covar_d = self.__gp.predict(mean_t[:Ny_gp], u_t, covar_t[:5,:5])
                 mean_next_pred = Af @ f.rk4(mean_t, u_t, []) + Bd @ mean_d
                 covar_x_next_pred = covar_x_next_func(mean_t, u_t, covar_d, covar_x_t)
             else: # Use GP as default
@@ -357,7 +358,9 @@ class MPC:
             u_delta = u_t - u_past
             obj += self.__l_func(var['mean', t], covar_x_t, u_t, cov_u, u_delta) + lam * var['eps', t]
             u_t = u_past
-        obj += self.__lf_func(var['mean', Nt], var['covariance', Nt].reshape((Ny, Ny)), P_s.reshape((Ny, Ny)))
+        L_x = ca.MX(ca.Sparsity.lower(Ny), var['L', Nt])
+        covar_x_t = L_to_cov_func(L_x)
+        obj += self.__lf_func(var['mean', Nt], covar_x_t, P_s.reshape((Ny, Ny)))
 #            obj += self.__lf_func(var['mean', Nt], covar_x_next)
 
         num_eq_con = ca.vertcat(*con_eq).size1()
@@ -449,21 +452,22 @@ class MPC:
         # Initialize variables
         self.__mean          = np.full((self.__Nsim + 1, Ny), x0)
         self.__mean_pred     = np.full((self.__Nsim + 1, Ny), x0)
-        self.__covariance    = np.full((self.__Nsim + 1, Ny, Ny), np.eye(Ny)* 0)
+        self.__covariance    = np.full((self.__Nsim + 1, Ny, Ny), np.eye(Ny) * 1e-8)
         self.__u             = np.full((self.__Nsim, Nu), u0)
 
         self.__mean[0]       = x0
         self.__mean_pred[0]  = x0
         #TODO: cannot use variance_0 with a hybrid model
-        self.__covariance[0] = 0 #np.diag(self.__variance_0)
+        self.__covariance[0] = np.eye(Ny)*1e-10 #np.diag(self.__variance_0)
         self.__u[0]          = u0
 
         # Initial guess of the warm start variables
         #TODO: Add option to restart with previous state
         self.__var_init = self.__var(0)
-        self.__var_init['covariance', 0] = self.__covariance[0].flatten()
+
         #TOTO: Add initialization of cov cholesky
-#         self.__var_init['L', 0] = ???
+        cov0 = self.__covariance[0]
+        self.__var_init['L', 0] = cov0[np.tril_indices(Ny)]
         self.__lam_x0 = np.zeros(self.__num_var)
         self.__lam_g0 = 0
 
@@ -474,20 +478,21 @@ class MPC:
             elif self.__discrete_method is 'rk4':
                 A, B = self.__model.discrete_rk4_linearize(x0, u0)
             elif self.__discrete_method is 'hybrid':
-                #TODO: Remove hard coding
                 A_f, B_f = self.__model.discrete_rk4_linearize(x0, u0)
-                N, Ny, Nu = self.__gp.get_size()
-                A_gp, B_gp = self.__gp.discrete_linearize(x0[:Ny], u0, np.eye(Ny+Nu)*1e-6)
+                N_gp, Ny_gp, Nu_gp = self.__gp.get_size()
+                A_gp, B_gp = self.__gp.discrete_linearize(x0[:Ny_gp], 
+                                                u0, np.eye(Ny_gp+Nu_gp)*1e-8)
                 A = A_f + self.__Bd @ A_gp @ self.__Bd.T
                 B = B_f + self.__Bd @ B_gp
             elif self.__discrete_method is 'd_hybrid':
                 A_f, B_f = self.__model.discrete_rk4_linearize(x0, u0)
-                N, Ny, Nu = self.__gp.get_size()
-                A_gp, B_gp = self.__gp.discrete_linearize(x0[:Ny], u0, np.eye(Ny+Nu)*1e-6)
+                N_gp, Ny_gp, Nu_gp = self.__gp.get_size()
+                A_gp, B_gp = self.__gp.discrete_linearize(x0[:Ny_gp], 
+                                                u0, np.eye(Ny_gp+Nu_gp)*1e-8)
                 A = A_f + self.__Bd @ A_gp @ self.__Bd.T
-                B = B_f + self.__Bd @ B_gp 
+                B = B_f + self.__Bd @ B_gp
             elif self.__discrete_method is 'gp':
-                A, B = self.__gp.discrete_linearize(x0, u0, np.eye(self.__Nx)*1e-6)
+                A, B = self.__gp.discrete_linearize(x0, u0, np.eye(self.__Nx)*1e-8)
             K, P, E = lqr(A, B, self.__Q, self.__R)
         else:
             K = np.zeros((Nu, Ny))
@@ -505,6 +510,8 @@ class MPC:
             
             """ Update Initial values with measurment"""
             self.__var_init['mean', 0]  = self.__mean[t]
+            self.__varlb['mean', 0]     = self.__mean[t]
+            self.__varub['mean', 0]     = self.__mean[t]
 
             # Get constraint parameters
             if con_par_func is not None:
@@ -551,7 +558,8 @@ class MPC:
 
             v = optvar['v', 0, :]
 
-            self.__u[t, :] = np.array(self.__u_func(self.__mean[t, :], v, K.flatten())).flatten()
+            self.__u[t, :] = np.array(self.__u_func(self.__mean[t, :], self.__x_sp, 
+                                v, K.flatten())).flatten()
             self.__mean_pred[t + 1] = np.array(optvar['mean', 1]).flatten()
             L = ca.DM(ca.Sparsity.lower(self.__Ny), optvar['L', 1])
             self.__covariance[t + 1] = L @ L.T
@@ -696,19 +704,10 @@ class MPC:
 
         r = ca.SX.sym('r')
         mean_s = ca.SX.sym('mean', ca.MX.size(mean))
-#        covar_s = ca.SX.sym('cov', ca.MX.size(covar))
         S_s = ca.SX.sym('S', ca.MX.size(covar))
         H_s = ca.SX.sym('H', 1, ca.MX.size2(H))
-
-#        cholesky = ca.Function('cholesky', [covar_s], [ca.chol(covar_s).T])
-#        S = cholesky(covar)
         S = covar
-#TODO: Clean up
-#        con_func = ca.Function('con', [mean_s, covar_s, H_s, r],
-#                               [H_s @ mean_s + r * ca.sqrt(H_s @ covar_s @ H_s.T)])
         con_func = ca.Function('con', [mean_s, S_s, H_s, r],
-                               #TODO: norm_2 don't work with ipopt
-#                               [H_s @ mean_s + r * ca.norm_2(H_s @ S_s)])
                                 [H_s @ mean_s + r * H_s @ ca.diag(S_s)])
                                
         con = []
