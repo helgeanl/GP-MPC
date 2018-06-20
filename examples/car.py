@@ -361,9 +361,11 @@ if 1:
 
     x0 = np.array([13.89, 0.0, 0.0, 0.0,.0 , 0.0])
     x_sp = np.array([13.89, 0., 0., 0., 100., 0. ])
+    Bf = np.vstack([np.zeros((3,3)), np.eye(3)])
+    Bd = np.vstack([np.eye(3), np.zeros((3,3))])
 
     mpc = MPC(horizon=20*dt, model=model,gp=gp, hybrid=model_hybrid,
-              discrete_method='rk4', gp_method='ME',
+              discrete_method='rk4', gp_method='ME', Bf=Bf, Bd=Bd,
               ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
               terminal_constraint=None, costFunc='quad', feedback=True,
               solver_opts=solver_opts,

@@ -200,7 +200,7 @@ class MPC:
 
 
         """ Input covariance matrix """
-        if hybrid is None:
+        if discrete_method is 'hybrid' or discrete_method is 'hybrid':
             N_gp, Ny_gp, Nu_gp = self.__gp.get_size()
             Nz_gp = Ny_gp + Nu_gp
             covar_x_s = ca.MX.sym('covar_x', Nz_gp, Nz_gp)
@@ -209,17 +209,12 @@ class MPC:
     
             covar_u_func = ca.Function('cov_u', [covar_x_sx, K_sx],
                                        [K_sx @ covar_x_sx @ K_sx.T])
-    
             cov_xu_func = ca.Function('cov_xu', [covar_x_sx, K_sx],
-                                      [covar_x_sx @ K_sx.T])
-    
+                                      [covar_x_sx @ K_sx.T])    
             cov_xu = cov_xu_func(covar_x_s, K_s.reshape((Nu, Ny)))
             cov_u = covar_u_func(covar_x_s, K_s.reshape((Nu, Ny)))
             covar_s = ca.blockcat(covar_x_s, cov_xu, cov_xu.T, cov_u)
-
             covar_func = ca.Function('covar', [covar_x_s], [covar_s])
-    
-
         else:
             covar_x_s = ca.MX.sym('covar_x', Ny, Ny)
             covar_x_sx = ca.SX.sym('cov_x', Ny, Ny)
@@ -243,7 +238,7 @@ class MPC:
     
 
         """ Hybrid output covariance matrix """
-        if hybrid is not None:
+        if discrete_method is 'hybrid':
             N_gp, Ny_gp, Nu_gp = self.__gp.get_size()
 #            Nz_gp = Ny_gp + Nu_gp
             covar_d_s = ca.SX.sym('covar_d', Ny_gp, Ny_gp)
@@ -329,9 +324,9 @@ class MPC:
             elif discrete_method is 'd_hybrid':
                 # Deterministic hybrid GP model
                 #TODO: Clean up this...
-                mean_d, covar_d = self.__gp.predict(mean_t[:Ny_gp], u_t, covar_t[:5,:5])
-#                mean_next_pred = Bf @ f.rk4(mean_t[Ny_gp:], mean_t[:Ny_gp], []) + Bd @ mean_d
-                mean_next_pred = ca.vertcat(mean_d ,f.rk4(mean_t[Ny_gp:], mean_t[:Ny_gp], []))
+                mean_d, covar_d = self.__gp.predict(mean_t[:3], u_t, covar_t[:5,:5])
+                mean_next_pred = Bf @ f.rk4(mean_t[3:], mean_t[:3], []) + Bd @ mean_d
+#                mean_next_pred = ca.vertcat(mean_d ,f.rk4(mean_t[3:], mean_t[:3], []))
                 covar_x_next_pred = ca.MX(Ny, Ny) 
             elif discrete_method is 'hybrid':
                 #TODO: Clean up this...
@@ -520,25 +515,23 @@ class MPC:
                 A[Ny_gp:, :Ny_gp] = B_f
                 B[:Ny_gp, :] = B_gp
             elif self.__discrete_method is 'd_hybrid':
-#                N_gp, Ny_gp, Nu_gp = self.__gp.get_size()
-#                A_f, B_f = self.__hybrid.discrete_rk4_linearize(x0[Ny_gp:], x0[:Ny_gp])
-#                A_gp, B_gp = self.__gp.discrete_linearize(x0[:Ny_gp], 
-#                                                u0, np.eye(Ny_gp+Nu_gp)*1e-8)
-#                A = self.__Bf @ A_f @ self.__Bf.T + self.__Bd @ A_gp @ self.__Bd.T
-#                B = self.__Bf @ B_f + self.__Bd @ B_gp
                 N_gp, Ny_gp, Nu_gp = self.__gp.get_size()
                 A_f, B_f = self.__hybrid.discrete_rk4_linearize(x0[Ny_gp:], x0[:Ny_gp])
                 A_gp, B_gp = self.__gp.discrete_linearize(x0[:Ny_gp], 
                                                 u0, np.eye(Ny_gp+Nu_gp)*1e-8)
-                A = np.zeros((Ny, Ny))
-                B = np.zeros((Ny, Nu))
-                A[:Ny_gp, :Ny_gp] = A_gp
-                A[Ny_gp:, Ny_gp:] = A_f
-                A[Ny_gp:, :Ny_gp] = B_f
-                B[:Ny_gp, :] = B_gp
-            elif self.__discrete_method is 'gp':
+                A = self.__Bf @ A_f @ self.__Bf.T + self.__Bd @ A_gp @ self.__Bd.T
+                B = self.__Bf @ B_f + self.__Bd @ B_gp
+#                N_gp, Ny_gp, Nu_gp = self.__gp.get_size()
+#
+#                A, B = self.__gp.discrete_linearize(x0[:Ny_gp], 
+#                                                u0, np.eye(Ny_gp+Nu_gp)*1e-8)
+#            elif self.__discrete_method is 'gp':
                 A, B = self.__gp.discrete_linearize(x0, u0, np.eye(self.__Nx)*1e-8)
-            K, P, E = lqr(A, B, self.__Q, self.__R)
+
+            if self.__discrete_method is 'hybrid' or self.__discrete_method is 'hybrid':
+                K, P, E = lqr(A, B, self.__Q[:Ny_gp,:Ny_gp], self.__R)
+            else:
+                K, P, E = lqr(A, B, self.__Q, self.__R)
         else:
             K = np.zeros((Nu, Ny))
             P = self.__P
