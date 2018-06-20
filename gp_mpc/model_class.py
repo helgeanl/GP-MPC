@@ -147,9 +147,10 @@ class Model:
         Ad = np.array(self.__discrete_rk4_jac_x(x0, u0, p0))
         Bd = np.array(self.__discrete_rk4_jac_u(x0, u0, p0))
         return Ad, Bd
-    
-    def rk4_jacobian(self, x0, u0, p0=[]):
-        """ Linearize the discrete rk4 system around the operating point
+
+
+    def rk4_jacobian_x(self, x0, u0, p0=[]):
+        """ Return state jacobian evaluated at the operating point
             x[k+1] = Ax[k] + Bu[k]
         # Arguments:
             x0: State vector
@@ -157,7 +158,19 @@ class Model:
             p0: Parameter vector (optional)
         """
         return self.__discrete_rk4_jac_x(x0, u0, p0)
-    
+
+
+    def rk4_jacobian_u(self, x0, u0, p0=[]):
+        """ Return input jacobian evaluated at the operating point
+            x[k+1] = Ax[k] + Bu[k]
+        # Arguments:
+            x0: State vector
+            u0: Input vector
+            p0: Parameter vector (optional)
+        """
+        return self.__discrete_rk4_jac_u(x0, u0, p0)
+
+
     def check_rk4_stability(self, x0, u0, d=.1, plot=False):
         """ Check if Runga Kutta 4 method is stable around operating point
         

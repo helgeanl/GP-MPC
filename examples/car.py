@@ -58,8 +58,8 @@ def ode(x, u, z, p):
     lr  = l - lf                        # Distance from CG to the rear tyre
     Fzf = lr * m * g / (2 * l)          # Vertical load on front wheels
     Fzr = lf * m * g / (2 * l)          # Vertical load on rear wheels
-    eps = 1e-10                        # Small epsilon to avoid dividing by zero
-#    x[0] = ca.fmax(x[0], 1e-10)
+    eps = 1e-20                        # Small epsilon to avoid dividing by zero
+
     dxdt = [
                 1/m * (m*x[1]*x[2] + 2*mu*Fzf*u[0] + 2*Cf*u[1]**2
                     - 2*Cf*u[1] * (x[1] + lf*x[2]) / (x[0] + eps) + 2*mu*Fzr*u[0]),
@@ -98,35 +98,15 @@ def ode_gp(x, u, z, p):
                     + 2*Cr*(x[1] - lf*x[2]) / (x[0] + eps)),
                 1/Iz * (2*lf*mu*Fzf*u[0]*u[1] + 2*lf*Cf*(x[1] + lf*x[2]) / (x[0] + eps)
                     - 2*lf*Cf*u[1] - 2*lr*Cr*(x[1] - lf*x[2]) / (x[0] + eps)),
-#                x[2],
-#                x[0]*ca.cos(x[3]) - x[1]*ca.sin(x[3]),
-#                x[0]*ca.sin(x[3]) + x[1]*ca.cos(x[3])
             ]
     return  ca.vertcat(*dxdt)
 
 
 def ode_hybrid(x, u, z, p):
-    # Model Parameters (Gao et al., 2014)
-    g   = 9.18                          # Gravity [m/s^2]
-    m   = 2050                          # Vehicle mass [kg]
-    Iz  = 3344                          # Yaw inertia [kg*m^2]
-    Cr   = 65000                         # Tyre corning stiffness [N/rad]
-    Cf   = 65000                        # Tyre corning stiffness [N/rad]
-    mu  = 0.5                           # Tyre friction coefficient
-    l   = 4.0                           # Vehicle length
-    lf  = 2.0                           # Distance from CG to the front tyre
-    lr  = l - lf                        # Distance from CG to the rear tyre
-    Fzf = lr * m * g / (2 * l)          # Vertical load on front wheels
-    Fzr = lf * m * g / (2 * l)          # Vertical load on rear wheels
-    eps = 1e-10                         # Small epsilon to avoid dividing by zero
-
     dxdt = [
-                0,
-                0,
-                0,
-                x[2],
-                x[0]*ca.cos(x[3]) - x[1]*ca.sin(x[3]),
-                x[0]*ca.sin(x[3]) + x[1]*ca.cos(x[3])
+                u[2],
+                u[0]*ca.cos(x[0]) - u[1]*ca.sin(x[0]),
+                u[0]*ca.sin(x[0]) + u[1]*ca.cos(x[0])
             ]
     return  ca.vertcat(*dxdt)
 
@@ -159,24 +139,24 @@ def inequality_constraints(x, covar, u, eps, par):
     slip_r = ca.Function('slip_r', [dx_s, dy_s, dpsi_s],
                          [(dy_s - lr*dpsi_s)/(dx_s + 1e-6)])
 
-    con_ineq.append(slip_f(x[0], x[1], x[2], u[1]) - slip_max - eps)
+    con_ineq.append(slip_f(x[0], x[1], x[2], u[1]) - slip_max - eps[0])
     con_ineq_ub.append(0)
     con_ineq_lb.append(-np.inf)
 
-    con_ineq.append(slip_min - slip_f(x[0], x[1], x[2], u[1]) - eps)
+    con_ineq.append(slip_min - slip_f(x[0], x[1], x[2], u[1]) - eps[0])
     con_ineq_ub.append(0)
     con_ineq_lb.append(-np.inf)
 
-    con_ineq.append(slip_r(x[0], x[1], x[2]) - slip_max - eps)
+    con_ineq.append(slip_r(x[0], x[1], x[2]) - slip_max - eps[0])
     con_ineq_ub.append(0)
     con_ineq_lb.append(-np.inf)
 
-    con_ineq.append(slip_min - slip_r(x[0], x[1], x[2]) - eps)
+    con_ineq.append(slip_min - slip_r(x[0], x[1], x[2]) - eps[0])
     con_ineq_ub.append(0)
     con_ineq_lb.append(-np.inf)
 
     """ Add road boundry constraints """
-    con_ineq.append(x[5])
+    con_ineq.append(x[5] - eps[1])
     con_ineq_ub.append(road_bound)
     con_ineq_lb.append(-road_bound)
 
@@ -187,7 +167,7 @@ def inequality_constraints(x, covar, u, eps, par):
     ellipse = ca.Function('ellipse', [Xcg_s, Ycg_s, obs_s],
                           [ ((Xcg_s - obs_s[0]) / (obs_s[2] + car_length))**2
                            + ((Ycg_s - obs_s[1]) / (obs_s[3] + car_width))**2] )
-    con_ineq.append(1 - ellipse(x[4], x[5], par) - eps)
+    con_ineq.append(1 - ellipse(x[4], x[5], par) - eps[2])
 
     con_ineq_ub.append(0)
     con_ineq_lb.append(-np.inf)
@@ -197,9 +177,6 @@ def inequality_constraints(x, covar, u, eps, par):
                 con_ineq_ub=con_ineq_ub
             )
     return cons
-
-
-
 
 
 
@@ -275,8 +252,8 @@ if 0:
     gp.save_model('gp_car_' + str((n_train + n_update)*N_new + N) + '_dt_' + str(dt) + '_normalize_' + str(normalize) + '_reduced_latin')
 else:
     gp = GP.load_model('gp_car_' + str((n_train + n_update)*N_new + N) + '_dt_' + str(dt) + '_normalize_' + str(normalize) + '_reduced_latin')
-    X_test, Y_test = model_gp.generate_training_data(N_test, uub, ulb, xub, xlb, noise=False)
-    gp.validate(X_test, Y_test)
+#    X_test, Y_test = model_gp.generate_training_data(N_test, uub, ulb, xub, xlb, noise=False)
+#    gp.validate(X_test, Y_test)
 
 
 """ Estimation of model errors using GP and RK4
@@ -316,19 +293,19 @@ if 0:
     x0 = np.array([13.89, 0.0, 0.0])
     x_sp = np.array([13.89, 0., 0.001])
     u0 = [0.0, 0.0]
-    
+
     cov0 = np.eye(Nx+Nu)
     t = np.linspace(0,20*dt, 20)
     #u_test = np.ones((20, 2))* np.array([1e-1, 0.0])
     u_i = np.sin(0.01*t) * 0
     u_test = np.vstack([0.5*u_i, 0.02*u_i]).T
-    
+
     # Penalty values for LQR
     Q = np.diag([.1, 10., 50.])
     R = np.diag([.1, 1])
-    
+
     xnames = [r'$\dot{x}$', r'$\dot{y}$', r'$\dot{\psi}$']
-    
+
     gp.predict_compare(x0, u_test, model_gp, feedback=False, x_ref=x_sp, Q=Q, R=R, 
                        methods = ['TA','ME'], num_cols=1, xnames=xnames)
     #gp.predict_compare(x0, u_test, model_gp, feedback=True, x_ref=x_sp, Q=Q, R=R, 
@@ -342,17 +319,17 @@ if 1:
     
     # Create hybrid model with state integrator
     Nx = 6
-    R_n = np.diag([1e-5, 1e-7, 1e-7, 1e-7, 1e-5, 1e-5])
-    model_hybrid   = Model(Nx=Nx, Nu=Nu, ode=ode_hybrid, dt=dt, R=R_n)
+    R_n = np.diag([1e-5, 1e-8, 1e-8, 1e-8, 1e-5, 1e-5])
+    model_hybrid   = Model(Nx=3, Nu=3, ode=ode_hybrid, dt=dt, R=R_n)
     model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R_n)
-    
+
     solver_opts = {}
     #solver_opts['ipopt.linear_solver'] = 'ma27'
-    solver_opts['ipopt.max_cpu_time'] = 10
+    solver_opts['ipopt.max_cpu_time'] = 2
     #solver_opts['ipopt.max_iter'] = 75
     solver_opts['expand']= True
     solver_opts['ipopt.expect_infeasible_problem'] = 'yes'
-    
+
     # Constraint parameters
     slip_min = -4.0 * np.pi / 180
     slip_max = 4.0 * np.pi / 180
@@ -363,39 +340,38 @@ if 1:
                    [60, -0.3, .01, .01],
                    [100, 0.3, .01, .01],
                    ])
-    
+
 #    obs = np.array([[-100,2.0,0.01,0.01]
 #                   ])
-    
+
     # Limits in the MPC problem
     ulb = [-.5, -.034]
     uub = [.5, .034]
     xlb = [10.0, -.5, -.15, -.3, .0, -10]
     xub = [30.0, .5, .15, .3, 500, 10]
-    
+
     # Penalty values
     P = np.diag([.0, 50., 10, .1, 0, 10])
     #Q = np.diag([.0, 5., 1., .01, 0, .1])
-    Q = np.diag([.001, 5., 1., .1, 1e-20, 1])
+    Q = np.diag([.001, 5., 1., .1, 1e-10, 1])
     R = np.diag([.1, 1])
     S = np.diag([1, 10])
     lam = 100
-    Af = ca.diag([0,0,0,1,1,1])
-    Bd = np.vstack([np.eye(3), np.zeros((3,3))])
+
 
     x0 = np.array([13.89, 0.0, 0.0, 0.0,.0 , 0.0])
-    x_sp = np.array([13.89, 0., 0., 0., 50., 0. ])
+    x_sp = np.array([13.89, 0., 0., 0., 100., 0. ])
 
-    mpc = MPC(horizon=20*dt, model=model,gp=gp, hybrid=None, Bd=Bd, Af=Af,
+    mpc = MPC(horizon=20*dt, model=model,gp=gp, hybrid=model_hybrid,
               discrete_method='rk4', gp_method='ME',
               ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
-              terminal_constraint=None, costFunc='quad', feedback=False,
+              terminal_constraint=None, costFunc='quad', feedback=True,
               solver_opts=solver_opts,
               inequality_constraints=inequality_constraints, num_con_par=4
               )
 
 
-    x, u = mpc.solve(x0, sim_time=200*dt, x_sp=x_sp, debug=False, noise=False,
+    x, u = mpc.solve(x0, sim_time=50*dt, x_sp=x_sp, debug=False, noise=False,
                      con_par_func=constraint_parameters)
     mpc.plot()
     plot_car(x[:, 4], x[:, 5])
