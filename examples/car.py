@@ -186,19 +186,20 @@ dt = 0.05
 Nx = 3
 Nu = 2
 R_n = np.diag([1e-5, 1e-8, 1e-8])
+#R_n = np.diag([1e-12, 1e-12, 1e-12])
 
 
 """ Training data options """
 N = 150 # Number of training data
-N_test = 150
-N_new = 50
-n_train = 0
+N_test = 500
+N_new = 10
+n_train = 1
 n_update = 0
 normalize = False
 
 # Limits in the training data
-ulb = [-.5, -.05]
-uub = [.5, .05]
+ulb = [-.5, -.04]
+uub = [.5, .04]
 xlb = [10.0, -.6, -.2]
 xub = [30.0, .6, .2]
 
@@ -212,32 +213,37 @@ X, Y           = model_gp.generate_training_data(N, uub, ulb, xub, xlb, noise=Tr
 if 0:
     solver_opts = {}
     #solver_opts['ipopt.linear_solver'] = 'ma27'
-    solver_opts['ipopt.max_cpu_time'] = 100
-    #solver_opts['ipopt.max_iter'] = 75
-    solver_opts['expand']= True
+#    solver_opts['ipopt.max_cpu_time'] = 500000
+#    solver_opts['ipopt.max_iter'] = 30000
+#    solver_opts['expand']= False
     
-    gp = GP(X, Y, ulb=ulb, uub=uub, optimizer_opts=solver_opts, normalize=normalize)
-    X_test, Y_test = model_gp.generate_training_data(N_test, uub, ulb, xub, xlb, noise=True)
-    SMSE = np.zeros((n_train + n_update + 1, Nx))
-    MNLP = np.zeros((n_train + n_update + 1, Nx))
+#    gp = GP(X, Y, ulb=ulb, uub=uub, optimizer_opts=solver_opts, normalize=normalize)
+    
+    SMSE = np.zeros((n_train + n_update , Nx))
+    MNLP = np.zeros((n_train + n_update , Nx))
     for i in range(n_train):
-        SMSE[i], MNLP[i] = gp.validate(X_test, Y_test)
-        gp.update_data(X_test, Y_test, N_new=N_new)
-        gp.optimize(normalize=normalize, opts=solver_opts, warm_start=False)
+        X_new, Y_new = model_gp.generate_training_data(N_new*i + N, uub, ulb, xub, xlb, noise=True)
+        gp = GP(X_new, Y_new, ulb=ulb, uub=uub, optimizer_opts=solver_opts, 
+                multistart=1, normalize=normalize)
         X_test, Y_test = model_gp.generate_training_data(N_test, uub, ulb, xub, xlb, noise=True)
+        SMSE[i], MNLP[i] = gp.validate(X_test, Y_test)
+#        gp.update_data(X_test, Y_test, N_new=N_new)
+#        gp.optimize(normalize=normalize, opts=solver_opts, warm_start=False)
+        
+        
     for i in range(n_update):
         SMSE[i + n_train], MNLP[i + n_train] = gp.validate(X_test, Y_test)
         gp.update_data(X_test, Y_test, N_new=N_new)
         X_test, Y_test = model_gp.generate_training_data(N_test, uub, ulb, xub, xlb, noise=True)
-    SMSE[-1], MNLP[-1] = gp.validate(X_test, Y_test)
+#    SMSE[-1], MNLP[-1] = gp.validate(X_test, Y_test)
     if 1:
-        N_data = np.linspace(N, (n_train + n_update)*N_new + N, (n_train + n_update + 1))
-        N_train = np.linspace(N, (n_train)*N_new + N, (n_train + 1))
+        N_data = np.linspace(N, (n_train -1 + n_update)*(N_new) + N, (n_train + n_update ))
+#        N_train = np.linspace(N, (n_train)*N_new + N, (n_train + 1))
         fig = plt.figure()
         for i in range(Nx):
             ax = fig.add_subplot(Nx, 1, i+1)
             ax.plot(N_data, SMSE[:, i],'o-')
-            ax.plot(N_train, SMSE[:n_train+1, i],'ro-')
+#            ax.plot(N_train, SMSE[:n_train+1, i],'ro-')
             ax.set_ylabel('SMSE State ' + str(i+1))
             ax.set_xlabel('Number of observations')
 
@@ -245,13 +251,14 @@ if 0:
         for i in range(Nx):
             ax = fig.add_subplot(Nx, 1, i+1)
             ax.plot(N_data, MNLP[:, i],'o-')
-            ax.plot(N_train, MNLP[:n_train+1, i],'ro-')
+#            ax.plot(N_train, MNLP[:n_train+1, i],'ro-')
             ax.set_ylabel('MNLP State ' + str(i+1))
             ax.set_xlabel('Number of observations')
         
     gp.save_model('gp_car_' + str((n_train + n_update)*N_new + N) + '_dt_' + str(dt) + '_normalize_' + str(normalize) + '_reduced_latin')
 else:
     gp = GP.load_model('gp_car_' + str((n_train + n_update)*N_new + N) + '_dt_' + str(dt) + '_normalize_' + str(normalize) + '_reduced_latin')
+#    gp = GP.load_model('gp_car_150_reduced_normalized_latin')
 #    X_test, Y_test = model_gp.generate_training_data(N_test, uub, ulb, xub, xlb, noise=False)
 #    gp.validate(X_test, Y_test)
 
@@ -288,7 +295,7 @@ else:
 
 """ Predict GP open/closed loop
 """
-if 0:
+if 1:
     # Test data
     x0 = np.array([13.89, 0.0, 0.0])
     x_sp = np.array([13.89, 0., 0.001])
@@ -308,8 +315,8 @@ if 0:
 
     gp.predict_compare(x0, u_test, model_gp, feedback=False, x_ref=x_sp, Q=Q, R=R, 
                        methods = ['TA','ME'], num_cols=1, xnames=xnames)
-    #gp.predict_compare(x0, u_test, model_gp, feedback=True, x_ref=x_sp, Q=Q, R=R, 
-    #                   methods = ['TA', 'ME'], num_cols=1, xnames=xnames)
+    gp.predict_compare(x0, u_test, model_gp, feedback=True, x_ref=x_sp, Q=Q, R=R, 
+                       methods = ['TA', 'ME'], num_cols=1, xnames=xnames)
     
    
 
@@ -325,7 +332,7 @@ if 1:
 
     solver_opts = {}
     #solver_opts['ipopt.linear_solver'] = 'ma27'
-    solver_opts['ipopt.max_cpu_time'] = 2
+    solver_opts['ipopt.max_cpu_time'] = 20
     #solver_opts['ipopt.max_iter'] = 75
     solver_opts['expand']= True
     solver_opts['ipopt.expect_infeasible_problem'] = 'yes'
@@ -356,16 +363,16 @@ if 1:
     Q = np.diag([.001, 5., 1., .1, 1e-10, 1])
     R = np.diag([.1, 1])
     S = np.diag([1, 10])
-    lam = 100
+    lam = 50
 
 
     x0 = np.array([13.89, 0.0, 0.0, 0.0,.0 , 0.0])
     x_sp = np.array([13.89, 0., 0., 0., 100., 0. ])
-    Bf = np.vstack([np.zeros((3,3)), np.eye(3)])
-    Bd = np.vstack([np.eye(3), np.zeros((3,3))])
+#    Bf = np.vstack([np.zeros((3,3)), np.eye(3)])
+#    Bd = np.vstack([np.eye(3), np.zeros((3,3))])
 
-    mpc = MPC(horizon=20*dt, model=model,gp=gp, hybrid=model_hybrid,
-              discrete_method='rk4', gp_method='ME', Bf=Bf, Bd=Bd,
+    mpc = MPC(horizon=17*dt, model=model,gp=gp, hybrid=model_hybrid,
+              discrete_method='hybrid', gp_method='ME', 
               ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
               terminal_constraint=None, costFunc='quad', feedback=True,
               solver_opts=solver_opts,
@@ -373,7 +380,7 @@ if 1:
               )
 
 
-    x, u = mpc.solve(x0, sim_time=50*dt, x_sp=x_sp, debug=False, noise=False,
+    x, u = mpc.solve(x0, sim_time=50*dt, x_sp=x_sp, debug=False, noise=True,
                      con_par_func=constraint_parameters)
     mpc.plot()
     plot_car(x[:, 4], x[:, 5])
@@ -383,11 +390,11 @@ if 1:
     
     
 #    ## Use previous data to train GP
-#    X = x[:-1,:]
-#    Y = x[1:,:]
-#    Z = np.hstack([X[:,:3], u])
-#    Z1 = Z[:]
-#    Y1 = Y[:,:3]
+    X = x[:-1,:]
+    Y = x[1:,:]
+    Z = np.hstack([X[:,:3], u])
+    Z1 = Z[:]
+    Y1 = Y[:,:3]
 #    Z2 = Z[100:]
 #    Y2 = Y[100:,:3]
     
