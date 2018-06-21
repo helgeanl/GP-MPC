@@ -55,8 +55,9 @@ class Model:
         """ Create integrator """
         # Integrator options
         options = {
-            "abstol" : 1e-6,
-            "reltol" : 1e-6,
+            "abstol" : 1e-5,
+            "reltol" : 1e-9,
+            "max_num_steps": 100,
             "tf" : dt,
         }
         if opt is not None:

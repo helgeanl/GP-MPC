@@ -14,13 +14,13 @@ import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
 from .gp_functions import gp_exact_moment, gp_taylor_approx, gp
 from .gp_functions import build_gp, build_TA_cov, get_mean_function
-from .optimize import train_gp
+from .optimize import train_gp, train_gp_numpy
 from .mpc_class import lqr
 
 class GP:
     def __init__(self, X, Y, mean_func="zero", gp_method="TA",
                  optimizer_opts=None, hyper=None, normalize=True, multistart=1,
-                 xlb=None, xub=None, ulb=None, uub=None, meta=None):
+                 xlb=None, xub=None, ulb=None, uub=None, meta=None, optimize_nummeric=True):
         """ Initialize and optimize GP model
 
         """
@@ -52,7 +52,8 @@ class GP:
         if hyper is None:
             self.optimize(X=X, Y=Y, opts=optimizer_opts, mean_func=mean_func,
                           xlb=xlb, xub=xub, ulb=ulb, uub=uub, 
-                          multistart=multistart, normalize=normalize)
+                          multistart=multistart, normalize=normalize, 
+                          optimize_nummeric=optimize_nummeric)
         else:
             self.__hyper  = np.array(hyper['hyper'])
             self.__invK   = np.array(hyper['invK'])
@@ -75,7 +76,8 @@ class GP:
 
     def optimize(self, X=None, Y=None, opts=None, mean_func='zero',
                  xlb=None, xub=None, ulb=None, uub=None,
-                 multistart=1, normalize=True, warm_start=False):
+                 multistart=1, normalize=True, warm_start=False, 
+                 optimize_nummeric=True):
         self.__mean_func = mean_func
         self.__normalize = normalize
 
@@ -119,9 +121,15 @@ class GP:
         else:
             hyp_init = None
             lam_x = None
-        opt = train_gp(self.__X, self.__Y, meanFunc=self.__mean_func,
-                           optimizer_opts=opts, multistart=multistart,
-                           hyper_init=hyp_init, lam_x0=lam_x)
+        if optimize_nummeric:
+            opt = train_gp_numpy(self.__X, self.__Y, meanFunc=self.__mean_func,
+                               optimizer_opts=opts, multistart=multistart,
+                               hyper_init=hyp_init) 
+        else:
+            opt = train_gp(self.__X, self.__Y, meanFunc=self.__mean_func,
+                               optimizer_opts=opts, multistart=multistart,
+                               hyper_init=hyp_init, lam_x0=lam_x)
+              
         self.__hyper = opt['hyper']
         self.__lam_x = opt['lam_x']
         self.__invK  = opt['invK']
@@ -460,8 +468,12 @@ class GP:
             u0: Input vector
             cov0: Covariance
         """
+        if self.__normalize:
+            x0 = self.standardize(x0, self.__meanX, self.__stdX)
+            u0 = self.standardize(u0, self.__meanU, self.__stdU)
         Ad = np.array(self.__discrete_jac_x(x0, u0, cov0))
         Bd = np.array(self.__discrete_jac_u(x0, u0, cov0))
+
         return Ad, Bd
 
 
@@ -495,7 +507,8 @@ class GP:
         
         
     def __to_dict(self):
-        """ Store model data in a struct """
+        """ Store model data in a dictionary """
+
         gp_dict = {}
         gp_dict['X'] = self.__X.tolist()
         gp_dict['Y'] = self.__Y.tolist()
