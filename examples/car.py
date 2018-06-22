@@ -190,7 +190,7 @@ R_n = np.diag([1e-5, 1e-8, 1e-8])
 
 
 """ Training data options """
-N = 150 # Number of training data
+N = 200 # Number of training data
 N_test = 500
 N_new = 10
 n_train = 1
@@ -259,8 +259,8 @@ if 0:
 else:
     gp = GP.load_model('gp_car_' + str((n_train + n_update)*N_new + N) + '_dt_' + str(dt) + '_normalize_' + str(normalize) + '_reduced_latin')
 #    gp = GP.load_model('gp_car_150_reduced_normalized_latin')
-#    X_test, Y_test = model_gp.generate_training_data(N_test, uub, ulb, xub, xlb, noise=False)
-#    gp.validate(X_test, Y_test)
+    X_test, Y_test = model_gp.generate_training_data(N_test, uub, ulb, xub, xlb, noise=False)
+    gp.validate(X_test, Y_test)
 
 
 """ Estimation of model errors using GP and RK4
@@ -295,7 +295,7 @@ else:
 
 """ Predict GP open/closed loop
 """
-if 1:
+if 0:
     # Test data
     x0 = np.array([13.89, 0.0, 0.0])
     x_sp = np.array([13.89, 0., 0.001])
@@ -352,10 +352,10 @@ if 1:
 #                   ])
 
     # Limits in the MPC problem
-    ulb = [-.5, -.034]
-    uub = [.5, .034]
-    xlb = [10.0, -.5, -.15, -.3, .0, -10]
-    xub = [30.0, .5, .15, .3, 500, 10]
+    ulb = [-.5, -.04]
+    uub = [.5, .04]
+    xlb = [10.0, -.5, -.2, -.3, .0, -10]
+    xub = [30.0, .5, .2, .3, 500, 10]
 
     # Penalty values
     P = np.diag([.0, 50., 10, .1, 0, 10])
@@ -363,16 +363,17 @@ if 1:
     Q = np.diag([.001, 5., 1., .1, 1e-10, 1])
     R = np.diag([.1, 1])
     S = np.diag([1, 10])
-    lam = 50
+    lam = 500
 
 
     x0 = np.array([13.89, 0.0, 0.0, 0.0,.0 , 0.0])
     x_sp = np.array([13.89, 0., 0., 0., 100., 0. ])
 #    Bf = np.vstack([np.zeros((3,3)), np.eye(3)])
 #    Bd = np.vstack([np.eye(3), np.zeros((3,3))])
+#
 
     mpc = MPC(horizon=17*dt, model=model,gp=gp, hybrid=model_hybrid,
-              discrete_method='hybrid', gp_method='ME', 
+              discrete_method='d_hybrid', gp_method='ME', 
               ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
               terminal_constraint=None, costFunc='quad', feedback=True,
               solver_opts=solver_opts,
@@ -380,21 +381,44 @@ if 1:
               )
 
 
-    x, u = mpc.solve(x0, sim_time=50*dt, x_sp=x_sp, debug=False, noise=True,
+    x, u = mpc.solve(x0, sim_time=200*dt, x_sp=x_sp, debug=False, noise=True,
                      con_par_func=constraint_parameters)
     mpc.plot()
     plot_car(x[:, 4], x[:, 5])
+
     #u1 = u[:20,:]
     #model.predict_compare(x[0], u1)
     
     
     
 #    ## Use previous data to train GP
-    X = x[:-1,:]
-    Y = x[1:,:]
-    Z = np.hstack([X[:,:3], u])
-    Z1 = Z[:]
-    Y1 = Y[:,:3]
+#    X = x[:-1,:]
+#    Y = x[1:,:]
+#    Z = np.hstack([X[:,:3], u])
+#    Z1 = Z[:]
+#    Y1 = Y[:,:3]
+#    gp2 = GP(Z1, Y1, ulb=ulb, uub=uub, optimizer_opts=solver_opts, 
+#                multistart=5, normalize=normalize)
+#    gp2.validate(X_test, Y_test)
+#    gp2.save_model('gp_car_test')
+    
+    
+if 1:   
+    gp2 = GP.load_model('gp_car_test')
+    mpc = MPC(horizon=17*dt, model=model,gp=gp2, hybrid=model_hybrid,
+          discrete_method='d_hybrid', gp_method='ME', 
+          ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
+          terminal_constraint=None, costFunc='quad', feedback=True,
+          solver_opts=solver_opts,
+          inequality_constraints=inequality_constraints, num_con_par=4
+          )
+
+
+    x, u = mpc.solve(x0, sim_time=200*dt, x_sp=x_sp, debug=False, noise=True,
+                     con_par_func=constraint_parameters)
+    mpc.plot()
+    plot_car(x[:, 4], x[:, 5])
+    
 #    Z2 = Z[100:]
 #    Y2 = Y[100:,:3]
     

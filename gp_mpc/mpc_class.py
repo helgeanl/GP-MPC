@@ -297,12 +297,9 @@ class MPC:
         con_eq.append(var['mean', 0] - mean_0_s)
         L_0_s = ca.MX(ca.Sparsity.lower(Ny), var['L', 0])
         L_init = cholesky(covariance_0_s.reshape((Ny,Ny)))
-        con_eq.append(L_0_s.nz[:]- L_init.nz[:])
-        
+        con_eq.append(L_0_s.nz[:]- L_init.nz[:])        
         u_past = u_0_s
 
-        #TODO: Fix hybrid model 
-        f = hybrid
         
         """ Build constraints """
         for t in range(Nt):
@@ -335,13 +332,13 @@ class MPC:
                 # Deterministic hybrid GP model
                 N_gp, Ny_gp, Nu_gp = self.__gp.get_size()
                 mean_d, covar_d = self.__gp.predict(mean_t[:Ny_gp], u_t, covar_t)
-                mean_next_pred = ca.vertcat(mean_d ,f.rk4(mean_t[Ny_gp:], mean_t[:Ny_gp], []))
+                mean_next_pred = ca.vertcat(mean_d, hybrid.rk4(mean_t[Ny_gp:], mean_t[:Ny_gp], []))
                 covar_x_next_pred = ca.MX(Ny, Ny) 
             elif discrete_method is 'hybrid':
                 # Hybrid GP model
                 N_gp, Ny_gp, Nu_gp = self.__gp.get_size()
                 mean_d, covar_d = self.__gp.predict(mean_t[:Ny_gp], u_t, covar_t)
-                mean_next_pred = ca.vertcat(mean_d, f.rk4(mean_t[Ny_gp:], mean_t[:Ny_gp], []))
+                mean_next_pred = ca.vertcat(mean_d, hybrid.rk4(mean_t[Ny_gp:], mean_t[:Ny_gp], []))
                 covar_x_next_pred = covar_x_next_func(mean_t, u_t, covar_d, covar_x_t)
             else: # Use GP as default
                 mean_next_pred, covar_x_next_pred = self.__gp.predict(mean_t, u_t, covar_t)
@@ -354,7 +351,7 @@ class MPC:
             L_x_next = ca.MX(ca.Sparsity.lower(Ny), var['L', t + 1])
             covar_x_next = L_to_cov_func(L_x_next).reshape((Ny*Ny,1))
             L_x_next_pred = cholesky(covar_x_next_pred)
-            con_eq.append(L_x_next_pred.nz[:]- L_x_next.nz[:])
+            con_eq.append(L_x_next_pred.nz[:] - L_x_next.nz[:])
 
 
             """ Chance state constraints """
@@ -387,7 +384,6 @@ class MPC:
                 con_ineq.extend(cons['con_ineq'])
                 con_ineq_lb.extend(cons['con_ineq_lb'])
                 con_ineq_ub.extend(cons['con_ineq_ub'])
-
 
             """ Objective function """
             u_delta = u_t - u_past
@@ -434,8 +430,6 @@ class MPC:
             options.update(solver_opts)
         self.__solver = ca.nlpsol('mpc_solver', 'ipopt', nlp, options)
 
-
-
         # First prediction used in the NLP, used in plot later
         self.__var_prediction = np.zeros((Nt + 1, Ny))
         self.__mean_prediction = np.zeros((Nt + 1, Ny))
@@ -461,6 +455,7 @@ class MPC:
         # Optional Arguments:
             x_sp: State set point, default is zero.
             u0: Initial input vector.
+            debug: If True, print debug information at each solve iteration.
             noise: If True, add gaussian noise to the simulation.
             con_par_func: Function to calculate the parameters to pass to the
                           inequality function, inputs the current state.
@@ -546,8 +541,6 @@ class MPC:
                                                 u0, np.eye(Ny_gp+Nu_gp)*1e-8)
 
             K, P, E = lqr(A, B, self.__Q, self.__R)
-#            K = np.zeros((Nu, Ny))
-#            P = self.__P
         else:
             K = np.zeros((Nu, Ny))
             P = self.__P
@@ -601,8 +594,6 @@ class MPC:
 
             if t == 0:
                  for i in range(Nt + 1):
-                     #TODO: Clean up
-#                     cov = optvar['covariance', i, :].reshape((Ny, Ny))
                      Li = ca.DM(ca.Sparsity.lower(self.__Ny), optvar['L', i])
                      cov = Li @ Li.T
                      self.__var_prediction[i, :] = np.array(ca.diag(cov)).flatten()
@@ -615,8 +606,6 @@ class MPC:
             self.__mean_pred[t + 1] = np.array(optvar['mean', 1]).flatten()
             L = ca.DM(ca.Sparsity.lower(self.__Ny), optvar['L', 1])
             self.__covariance[t + 1] = L @ L.T
-            #TODO: Clean up
-#            self.__covariance[t + 1] = np.array(optvar['covariance', 1].reshape((Ny, Ny)))
             
             if debug:
                 self.__debug(t)
