@@ -28,7 +28,8 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero', prior=None):
         hyper: Array with hyperparameters [ell_1 .. ell_Nx sf sn], where Nx is the
             number of inputs to the GP.
         X: Training data matrix with inputs of size (N x Nx).
-        Y: Training data matrix with outpyts of size (N x Ny), with Ny number of outputs.
+        Y: Training data matrix with outpyts of size (N x Ny),
+            with Ny number of outputs.
 
     # Returns:
         NLL: The negative log likelihood function (scalar)
@@ -104,20 +105,21 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     the Gaussian Process. The optimalization use CasADi to find the gradients
     and use the interior point method IPOPT to find the solution.
 
-    A uniform prior of the hyperparameters are assumed and implemented as 
+    A uniform prior of the hyperparameters are assumed and implemented as
     limits in the optimization problem.
 
     NOTE: This function use the symbolic framework from CasADi to optimize the
-            hyperparameters, where the gradients are found using algorithmic 
+            hyperparameters, where the gradients are found using algorithmic
             differentiation. This gives the exact gradients, but require a lot
             more memory than the nummeric version 'train_gp_numpy' and have a
-            quite horrible scaling problem. The memory usage from the symbolic 
+            quite horrible scaling problem. The memory usage from the symbolic
             gradients tend to explode with the number of observations.
 
     # Arguments:
-        X: Training data matrix with inputs of size (N x Nx), where Nx is the number
-            of inputs to the GP.
-        Y: Training data matrix with outpyts of size (N x Ny), with Ny number of outputs.
+        X: Training data matrix with inputs of size (N x Nx),
+            where Nx is the number of inputs to the GP.
+        Y: Training data matrix with outpyts of size (N x Ny),
+            with Ny number of outputs.
         meanFunc: String with the name of the wanted mean function.
             Possible options:
                 'zero':       m = 0
@@ -126,7 +128,8 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
                 'polynomial': m(x) = xT*diag(a)*x + bT*x + c
 
     # Return:
-        opt: Dictionary with the optimal hyperparameters [ell_1 .. ell_Nx sf sn].
+        opt: Dictionary with the optimal hyperparameters
+                [ell_1 .. ell_Nx sf sn].
     """
 
     if log:
@@ -203,7 +206,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
         meanF     = np.mean(Y[:, output])
         lb        = -np.inf * np.ones(num_hyp)
         ub        = np.inf * np.ones(num_hyp)
-#
+
         lb[:Nx]    = 1e-2
         ub[:Nx]    = 1e2
         lb[Nx]     = 1e-8
@@ -239,7 +242,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
         obj = np.zeros((multistart, 1))
         hyp_opt_loc = np.zeros((multistart, num_hyp))
         lam_x_opt_loc = np.zeros((multistart, num_hyp))
-        
+
         for i in range(multistart):
             solve_time = -time.time()
             if warm_start:
@@ -299,8 +302,8 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
 
 def calc_cov_matrix(X, ell, sf2):
     """ Calculate covariance matrix K
-    
-        Squared Exponential ARD covariance kernel 
+
+        Squared Exponential ARD covariance kernel
 
     # Arguments:
         X: Training data matrix with inputs of size (N x Nx).
@@ -358,27 +361,28 @@ def train_gp_numpy(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=Fals
     """ Train hyperparameters using scipy / SLSQP
 
     Maximum likelihood estimation is used to optimize the hyperparameters of
-    the Gaussian Process. The optimization use finite differences to estimate 
-    the gradients and Sequential Least SQuares Programming (SLSQP) to find 
+    the Gaussian Process. The optimization use finite differences to estimate
+    the gradients and Sequential Least SQuares Programming (SLSQP) to find
     the optimal solution.
-    
-    A uniform prior of the hyperparameters are assumed and implemented as 
+
+    A uniform prior of the hyperparameters are assumed and implemented as
     limits in the optimization problem.
-    
-    NOTE: Unlike the casadi version 'train_gp', this function use finite    
-            differences to estimate the gradients. To get a better result 
-            and reduce the computation time the explicit gradients should 
-            be implemented. The gradient equations are given by 
+
+    NOTE: Unlike the casadi version 'train_gp', this function use finite
+            differences to estimate the gradients. To get a better result
+            and reduce the computation time the explicit gradients should
+            be implemented. The gradient equations are given by
             (Rassmussen, 2006).
-            
+
     NOTE: This version only support a zero-mean function. To enable the use of
             other mean functions, this has to be included in the calculations
             in the 'calc_NLL_numpy' function.
-            
+
     # Arguments:
-        X: Training data matrix with inputs of size (N x Nx), where Nx is the number
-            of inputs to the GP.
-        Y: Training data matrix with outpyts of size (N x Ny), with Ny number of outputs.
+        X: Training data matrix with inputs of size (N x Nx),
+            where Nx is the number of inputs to the GP.
+        Y: Training data matrix with outpyts of size (N x Ny),
+            with Ny number of outputs.
         meanFunc: String with the name of the wanted mean function.
             Possible options:
                 'zero':       m = 0
@@ -417,7 +421,7 @@ def train_gp_numpy(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=Fals
     if optimizer_opts is not None:
         options.update(optimizer_opts)
 
-    
+
     hyp_opt = np.zeros((Ny, num_hyp))
     invK = np.zeros((Ny, N, N))
     alpha = np.zeros((Ny, N))
@@ -437,8 +441,8 @@ def train_gp_numpy(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=Fals
         lb[Nx + 1] = 10**-10
         ub[Nx + 1] = 10**-2
         bounds = np.hstack((lb.reshape(num_hyp, 1), ub.reshape(num_hyp, 1)))
-        
-        if hyper_init is None:            
+
+        if hyper_init is None:
             hyp_init = np.zeros((num_hyp))
             hyp_init[:Nx] = np.std(X, 0)
             hyp_init[Nx] = np.std(Y[:, output])
@@ -581,6 +585,3 @@ def standardize(X_original, meanX, stdX):
 def standardize_inverse(X_scaled, meanX, stdX):
     # Scale input and output variables
     return X_scaled * stdX + meanX
-
-
-

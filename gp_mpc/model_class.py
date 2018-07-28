@@ -174,7 +174,7 @@ class Model:
 
     def check_rk4_stability(self, x0, u0, d=.1, plot=False):
         """ Check if Runga Kutta 4 method is stable around operating point
-        
+
         # Return True if stable, False if not stable
         """
         A, B = self.linearize(x0, u0, p0=[])
@@ -249,8 +249,10 @@ class Model:
 
         # Arguments:
             x0: Initial state (Nx, 1)
-            u: Input matrix with the input for each timestep in the simulation horizon (Nt, Nu)
-            p: Parameter matrix with the parameters for each timestep in the simulation horizon (Nt, Np)
+            u: Input matrix with the input for each timestep in the
+                simulation horizon (Nt, Nu)
+            p: Parameter matrix with the parameters for each timestep
+                in the simulation horizon (Nt, Np)
             noise: If True, add gaussian noise using the noise covariance matrix
 
         # Output:

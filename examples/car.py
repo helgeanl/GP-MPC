@@ -9,9 +9,6 @@ from __future__ import division
 from __future__ import print_function
 
 from sys import path
-#path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.1-64bit")
-
 path.append(r"./../")
 
 
@@ -216,21 +213,21 @@ if 0:
 #    solver_opts['ipopt.max_cpu_time'] = 500000
 #    solver_opts['ipopt.max_iter'] = 30000
 #    solver_opts['expand']= False
-    
+
 #    gp = GP(X, Y, ulb=ulb, uub=uub, optimizer_opts=solver_opts, normalize=normalize)
-    
+
     SMSE = np.zeros((n_train + n_update , Nx))
     MNLP = np.zeros((n_train + n_update , Nx))
     for i in range(n_train):
         X_new, Y_new = model_gp.generate_training_data(N_new*i + N, uub, ulb, xub, xlb, noise=True)
-        gp = GP(X_new, Y_new, ulb=ulb, uub=uub, optimizer_opts=solver_opts, 
+        gp = GP(X_new, Y_new, ulb=ulb, uub=uub, optimizer_opts=solver_opts,
                 multistart=1, normalize=normalize)
         X_test, Y_test = model_gp.generate_training_data(N_test, uub, ulb, xub, xlb, noise=True)
         SMSE[i], MNLP[i] = gp.validate(X_test, Y_test)
 #        gp.update_data(X_test, Y_test, N_new=N_new)
 #        gp.optimize(normalize=normalize, opts=solver_opts, warm_start=False)
-        
-        
+
+
     for i in range(n_update):
         SMSE[i + n_train], MNLP[i + n_train] = gp.validate(X_test, Y_test)
         gp.update_data(X_test, Y_test, N_new=N_new)
@@ -254,7 +251,7 @@ if 0:
 #            ax.plot(N_train, MNLP[:n_train+1, i],'ro-')
             ax.set_ylabel('MNLP State ' + str(i+1))
             ax.set_xlabel('Number of observations')
-        
+
     gp.save_model('gp_car_' + str((n_train + n_update)*N_new + N) + '_dt_' + str(dt) + '_normalize_' + str(normalize) + '_reduced_latin')
 else:
     gp = GP.load_model('gp_car_' + str((n_train + n_update)*N_new + N) + '_dt_' + str(dt) + '_normalize_' + str(normalize) + '_reduced_latin')
@@ -272,10 +269,10 @@ if 0:
 #    model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R_n)
 
     solver_opts = {}
-    #solver_opts['ipopt.linear_solver'] = 'ma27'
+    solver_opts['ipopt.linear_solver'] = 'ma27'
     solver_opts['ipopt.max_cpu_time'] = 100
     #solver_opts['ipopt.max_iter'] = 75
-    solver_opts['expand']= True    
+    solver_opts['expand']= True
     R_n = np.diag([1e-5, 1e-7, 1e-7])
     X, Y    = model_gp.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
     Y_error = np.zeros(Y.shape)
@@ -283,7 +280,7 @@ if 0:
         Y_error[i] = Y[i] - np.array(model_gp.rk4(X[i,:Nx], X[i,Nx:], [])).flatten()
 
     gp_error = GP(X, Y_error, ulb=ulb, uub=uub, optimizer_opts=solver_opts, normalize=normalize)
-        
+
     gp_error.save_model('gp_car_error_' + str((n_train + n_update)*N_new + N) + '_dt_' + str(dt) + '_normalize_' + str(normalize) + '_reduced_latin')
 else:
     print('')
@@ -313,17 +310,17 @@ if 0:
 
     xnames = [r'$\dot{x}$', r'$\dot{y}$', r'$\dot{\psi}$']
 
-    gp.predict_compare(x0, u_test, model_gp, feedback=False, x_ref=x_sp, Q=Q, R=R, 
+    gp.predict_compare(x0, u_test, model_gp, feedback=False, x_ref=x_sp, Q=Q, R=R,
                        methods = ['TA','ME'], num_cols=1, xnames=xnames)
-    gp.predict_compare(x0, u_test, model_gp, feedback=True, x_ref=x_sp, Q=Q, R=R, 
+    gp.predict_compare(x0, u_test, model_gp, feedback=True, x_ref=x_sp, Q=Q, R=R,
                        methods = ['TA', 'ME'], num_cols=1, xnames=xnames)
-    
-   
+
+
 
 """ Solve MPC with constraints
 """
 if 1:
-    
+
     # Create hybrid model with state integrator
     Nx = 6
     R_n = np.diag([1e-5, 1e-8, 1e-8, 1e-8, 1e-5, 1e-5])
@@ -373,7 +370,7 @@ if 1:
 #
 
     mpc = MPC(horizon=17*dt, model=model,gp=gp, hybrid=model_hybrid,
-              discrete_method='d_hybrid', gp_method='ME', 
+              discrete_method='hybrid', gp_method='ME',
               ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
               terminal_constraint=None, costFunc='quad', feedback=True,
               solver_opts=solver_opts,
@@ -381,32 +378,32 @@ if 1:
               )
 
 
-    x, u = mpc.solve(x0, sim_time=200*dt, x_sp=x_sp, debug=False, noise=True,
+    x, u = mpc.solve(x0, sim_time=50*dt, x_sp=x_sp, debug=False, noise=True,
                      con_par_func=constraint_parameters)
     mpc.plot()
     plot_car(x[:, 4], x[:, 5])
 
     #u1 = u[:20,:]
     #model.predict_compare(x[0], u1)
-    
-    
-    
+
+
+
 #    ## Use previous data to train GP
 #    X = x[:-1,:]
 #    Y = x[1:,:]
 #    Z = np.hstack([X[:,:3], u])
 #    Z1 = Z[:]
 #    Y1 = Y[:,:3]
-#    gp2 = GP(Z1, Y1, ulb=ulb, uub=uub, optimizer_opts=solver_opts, 
+#    gp2 = GP(Z1, Y1, ulb=ulb, uub=uub, optimizer_opts=solver_opts,
 #                multistart=5, normalize=normalize)
 #    gp2.validate(X_test, Y_test)
 #    gp2.save_model('gp_car_test')
-    
-    
-if 1:   
+
+
+if 0:
     gp2 = GP.load_model('gp_car_test')
     mpc = MPC(horizon=17*dt, model=model,gp=gp2, hybrid=model_hybrid,
-          discrete_method='d_hybrid', gp_method='ME', 
+          discrete_method='hybrid', gp_method='ME',
           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,
           terminal_constraint=None, costFunc='quad', feedback=True,
           solver_opts=solver_opts,
@@ -418,10 +415,10 @@ if 1:
                      con_par_func=constraint_parameters)
     mpc.plot()
     plot_car(x[:, 4], x[:, 5])
-    
+
 #    Z2 = Z[100:]
 #    Y2 = Y[100:,:3]
-    
+
 #    gp_2 = GP(Z1, Y1, ulb=ulb, uub=uub, optimizer_opts=solver_opts, normalize=normalize)
 #    gp.validate(Z2, Y2)
 ##
@@ -430,28 +427,28 @@ if 1:
         x0 = np.array([13.89, 0.0, 0.0])
         x_sp = np.array([13.89, 0., 0.001])
         u0 = [0.0, 0.0]
-        
+
         cov0 = np.eye(Nx+Nu)
         t = np.linspace(0,20*dt, 20)
         #u_test = np.ones((20, 2))* np.array([1e-1, 0.0])
         u_i = np.sin(0.01*t) * 0
         u_test = np.vstack([0.5*u_i, 0.02*u_i]).T
-        
+
         # Penalty values for LQR
         Q = np.diag([.1, 10., 50.])
         R = np.diag([.1, 1])
-        
+
         xnames = [r'$\dot{x}$', r'$\dot{y}$', r'$\dot{\psi}$']
-        
-        gp.predict_compare(x0, u_test, model_gp, feedback=False, x_ref=x_sp, Q=Q, R=R, 
+
+        gp.predict_compare(x0, u_test, model_gp, feedback=False, x_ref=x_sp, Q=Q, R=R,
                            methods = ['TA','ME'], num_cols=1, xnames=xnames)
-        gp.predict_compare(x0, u_test, model_gp, feedback=True, x_ref=x_sp, Q=Q, R=R, 
+        gp.predict_compare(x0, u_test, model_gp, feedback=True, x_ref=x_sp, Q=Q, R=R,
                            methods = ['TA', 'ME'], num_cols=1, xnames=xnames)
-#        
-#    
-#    
-#    
-    
+#
+#
+#
+#
+
     ## Create GP model
     #solver_opts['expand']= False
     #gp = GP(Z[:,:3], Y[:,:3], ulb=ulb, uub=uub, optimizer_opts=solver_opts, normalize=True)
@@ -459,7 +456,7 @@ if 1:
     ##gp = GP.load_model('gp_car')
     #gp.validate(Z2, Y2)
     #gp.predict_compare(x0, u_test, model)
-    
+
     #mpc_gp = MPC(horizon=2*dt, gp=gp, model=model,
     #          discrete_method='gp', gp_method='TA',
     #          ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S, lam=lam,

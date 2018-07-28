@@ -9,8 +9,6 @@ from __future__ import division
 from __future__ import print_function
 
 from sys import path
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
-#path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.1-64bit")
 path.append(r"./../")
 
 import numpy as np
