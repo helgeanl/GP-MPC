@@ -14,6 +14,7 @@ import numpy as np
 import casadi as ca
 from scipy.spatial import distance
 from .gp_functions import get_mean_function, gp, gp_exact_moment
+from scipy.optimize import minimize
 
 # -----------------------------------------------------------------------------
 # Optimization of hyperperameters as a constrained minimization problem
@@ -27,7 +28,8 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero', prior=None):
         hyper: Array with hyperparameters [ell_1 .. ell_Nx sf sn], where Nx is the
             number of inputs to the GP.
         X: Training data matrix with inputs of size (N x Nx).
-        Y: Training data matrix with outpyts of size (N x Ny), with Ny number of outputs.
+        Y: Training data matrix with outpyts of size (N x Ny),
+            with Ny number of outputs.
 
     # Returns:
         NLL: The negative log likelihood function (scalar)
@@ -97,15 +99,27 @@ def calc_NLL(hyper, X, Y, squaredist, meanFunc='zero', prior=None):
 
 def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
              multistart=1, optimizer_opts=None):
-    """ Train hyperparameters
+    """ Train hyperparameters using CasADi/IPOPT
 
     Maximum likelihood estimation is used to optimize the hyperparameters of
-    the Gaussian Process.
+    the Gaussian Process. The optimalization use CasADi to find the gradients
+    and use the interior point method IPOPT to find the solution.
+
+    A uniform prior of the hyperparameters are assumed and implemented as
+    limits in the optimization problem.
+
+    NOTE: This function use the symbolic framework from CasADi to optimize the
+            hyperparameters, where the gradients are found using algorithmic
+            differentiation. This gives the exact gradients, but require a lot
+            more memory than the nummeric version 'train_gp_numpy' and have a
+            quite horrible scaling problem. The memory usage from the symbolic
+            gradients tend to explode with the number of observations.
 
     # Arguments:
-        X: Training data matrix with inputs of size (N x Nx), where Nx is the number
-            of inputs to the GP.
-        Y: Training data matrix with outpyts of size (N x Ny), with Ny number of outputs.
+        X: Training data matrix with inputs of size (N x Nx),
+            where Nx is the number of inputs to the GP.
+        Y: Training data matrix with outpyts of size (N x Ny),
+            with Ny number of outputs.
         meanFunc: String with the name of the wanted mean function.
             Possible options:
                 'zero':       m = 0
@@ -114,7 +128,8 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
                 'polynomial': m(x) = xT*diag(a)*x + bT*x + c
 
     # Return:
-        opt: Dictionary with the optimal hyperparameters [ell_1 .. ell_Nx sf sn].
+        opt: Dictionary with the optimal hyperparameters
+                [ell_1 .. ell_Nx sf sn].
     """
 
     if log:
@@ -188,37 +203,22 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     print('# Optimizing hyperparameters (N=%d)' % N )
     print('----------------------------------------')
     for output in range(Ny):
-        meanF     = np.mean(Y)
+        meanF     = np.mean(Y[:, output])
         lb        = -np.inf * np.ones(num_hyp)
         ub        = np.inf * np.ones(num_hyp)
-#
+
         lb[:Nx]    = 1e-2
         ub[:Nx]    = 1e2
         lb[Nx]     = 1e-8
         ub[Nx]     = 1e2
-        lb[Nx + 1] = 10**-6
-        ub[Nx + 1] = 10**-4
-
-#        lb[:Nx]    = np.sqrt(10**(-3))
-#        ub[:Nx]    = np.sqrt(10**(3))
-#        lb[Nx]     = stdF / 5.
-#        ub[Nx]     = stdF * 5.
-#        lb[Nx + 1] = 10**-6
-#        ub[Nx + 1] = 10**-4
-#
-
-#        lb[:Nx]    = stdX / 10
-#        ub[:Nx]    = stdX * 10
-#        lb[Nx]     = stdF / 10
-#        ub[Nx]     = stdF * 10
-#        lb[Nx + 1] = 10**-6
-#        ub[Nx + 1] = 10**-4
+        lb[Nx + 1] = 10**-10
+        ub[Nx + 1] = 10**-2
 
         if hyper_init is None:
 #            hyp_init = pyDOE.lhs(num_hyp, samples=1).flatten()
             hyp_init = np.zeros((num_hyp))
             hyp_init[:Nx] = np.std(X, 0)
-            hyp_init[Nx] = np.std(Y[output])
+            hyp_init[Nx] = np.std(Y[:, output])
             hyp_init[Nx + 1] = 1e-5
 #            hyp_init = hyp_init * (ub - lb) + lb
         else:
@@ -242,7 +242,7 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
         obj = np.zeros((multistart, 1))
         hyp_opt_loc = np.zeros((multistart, num_hyp))
         lam_x_opt_loc = np.zeros((multistart, num_hyp))
-        
+
         for i in range(multistart):
             solve_time = -time.time()
             if warm_start:
@@ -294,6 +294,220 @@ def train_gp(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
     return opt
 
 
+
+
+# -----------------------------------------------------------------------------
+# Optimization of hyperperameters using scipy
+# -----------------------------------------------------------------------------
+
+def calc_cov_matrix(X, ell, sf2):
+    """ Calculate covariance matrix K
+
+        Squared Exponential ARD covariance kernel
+
+    # Arguments:
+        X: Training data matrix with inputs of size (N x Nx).
+        ell: Vector with length scales of size Nx.
+        sf2: Signal variance (scalar)
+    """
+    dist = 0
+    n, D = X.shape
+    for i in range(D):
+        x = X[:, i].reshape(n, 1)
+        dist = (np.sum(x**2, 1).reshape(-1, 1) + np.sum(x**2, 1) -
+                2 * np.dot(x, x.T)) / ell[i]**2 + dist
+    return sf2 * np.exp(-.5 * dist)
+
+
+def calc_NLL_numpy(hyper, X, Y):
+    """ Objective function
+
+    Calculate the negative log likelihood function.
+
+    # Arguments:
+        hyper: Array with hyperparameters [ell_1 .. ell_Nx sf sn], where Nx is the
+                number of inputs to the GP.
+        X: Training data matrix with inputs of size (N x Nx).
+        Y: Training data matrix with outpyts of size (N x Ny), with Ny number of outputs.
+
+    # Returns:
+        NLL: The negative log likelihood function (scalar)
+    """
+
+    n, D = X.shape
+    ell = hyper[:D]
+    sf2 = hyper[D]**2
+    lik = hyper[D + 1]**2
+    #m   = hyper[D + 2]
+    K = calc_cov_matrix(X, ell, sf2)
+    K = K + lik * np.eye(n)
+    K = (K + K.T) * 0.5   # Make sure matrix is symmentric
+    try:
+        L = np.linalg.cholesky(K)
+    except np.linalg.LinAlgError:
+        print("K is not positive definit, adding jitter!")
+        K = K + np.eye(n) * 1e-8
+        L = np.linalg.cholesky(K)
+
+    logK = 2 * np.sum(np.log(np.abs(np.diag(L))))
+    invLy = np.linalg.solve(L, Y)
+    alpha = np.linalg.solve(L.T, invLy)
+    NLL = 0.5 * np.dot(Y.T, alpha) + 0.5 * logK
+    return NLL
+
+
+def train_gp_numpy(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=False,
+             multistart=1, optimizer_opts=None):
+    """ Train hyperparameters using scipy / SLSQP
+
+    Maximum likelihood estimation is used to optimize the hyperparameters of
+    the Gaussian Process. The optimization use finite differences to estimate
+    the gradients and Sequential Least SQuares Programming (SLSQP) to find
+    the optimal solution.
+
+    A uniform prior of the hyperparameters are assumed and implemented as
+    limits in the optimization problem.
+
+    NOTE: Unlike the casadi version 'train_gp', this function use finite
+            differences to estimate the gradients. To get a better result
+            and reduce the computation time the explicit gradients should
+            be implemented. The gradient equations are given by
+            (Rassmussen, 2006).
+
+    NOTE: This version only support a zero-mean function. To enable the use of
+            other mean functions, this has to be included in the calculations
+            in the 'calc_NLL_numpy' function.
+
+    # Arguments:
+        X: Training data matrix with inputs of size (N x Nx),
+            where Nx is the number of inputs to the GP.
+        Y: Training data matrix with outpyts of size (N x Ny),
+            with Ny number of outputs.
+        meanFunc: String with the name of the wanted mean function.
+            Possible options:
+                'zero':       m = 0
+                'const':      m = a
+                'linear':     m(x) = aT*x + b
+                'polynomial': m(x) = xT*diag(a)*x + bT*x + c
+
+    # Return:
+        opt: Dictionary with the optimal hyperparameters [ell_1 .. ell_Nx sf sn].
+    """
+#    if log:
+#        X = np.log(X)
+#        Y = np.log(Y)
+
+    N, Nx = X.shape
+    Ny = Y.shape[1]
+
+    # Counting mean function parameters
+    if meanFunc == 'zero':
+        h_m = 0
+    elif meanFunc == 'const':
+        h_m = 1
+    elif meanFunc == 'linear':
+        h_m = Nx + 1
+    elif meanFunc == 'polynomial':
+        h_m = 2 * Nx + 1
+    else:
+        raise NameError('No mean function called: ' + meanFunc)
+
+    h_ell   = Nx    # Number of length scales parameters
+    h_sf    = 1     # Standard deviation function
+    h_sn    = 1     # Standard deviation noise
+    num_hyp = h_ell + h_sf + h_sn + h_m
+
+    options = {'disp': True, 'maxiter': 10000}
+    if optimizer_opts is not None:
+        options.update(optimizer_opts)
+
+
+    hyp_opt = np.zeros((Ny, num_hyp))
+    invK = np.zeros((Ny, N, N))
+    alpha = np.zeros((Ny, N))
+    chol = np.zeros((Ny, N, N))
+
+    print('\n________________________________________')
+    print('# Optimizing hyperparameters (N=%d)' % N )
+    print('----------------------------------------')
+    for output in range(Ny):
+        meanF     = np.mean(Y[:, output])
+        lb        = -np.inf * np.ones(num_hyp)
+        ub        = np.inf * np.ones(num_hyp)
+        lb[:Nx]    = 1-2
+        ub[:Nx]    = 2e2
+        lb[Nx]     = 1e-8
+        ub[Nx]     = 1e2
+        lb[Nx + 1] = 10**-10
+        ub[Nx + 1] = 10**-2
+        bounds = np.hstack((lb.reshape(num_hyp, 1), ub.reshape(num_hyp, 1)))
+
+        if hyper_init is None:
+            hyp_init = np.zeros((num_hyp))
+            hyp_init[:Nx] = np.std(X, 0)
+            hyp_init[Nx] = np.std(Y[:, output])
+            hyp_init[Nx + 1] = 1e-5
+        else:
+            hyp_init = hyper_init[output, :]
+
+        if meanFunc is 'const':
+            lb[-1] = -1e2
+            ub[-1] = 1e2
+        elif meanFunc is not 'zero':
+            lb[-1] = meanF / 10 -1e-8
+            ub[-1] = meanF * 10 + 1e-8
+            lb[-h_m:-1] = -1e-2
+            ub[-h_m:-1] = 1e-2
+
+        obj = np.zeros((multistart, 1))
+        hyp_opt_loc = np.zeros((multistart, num_hyp))
+        for i in range(multistart):
+            solve_time = -time.time()
+            res = minimize(calc_NLL_numpy, hyp_init, args=(X, Y[:, output]),
+                       method='SLSQP', options=options, bounds=bounds, tol=1e-12)
+            obj[i] = res.fun
+            hyp_opt_loc[i, :] = res.x
+        solve_time += time.time()
+        print("* State %d:  %f s" % (output, solve_time))
+
+        # With multistart, get solution with lowest decision function value
+        hyp_opt[output, :]   = hyp_opt_loc[np.argmin(obj)]
+        ell = hyp_opt[output, :Nx]
+        sf2 = hyp_opt[output, Nx]**2
+        sn2 = hyp_opt[output, Nx + 1]**2
+
+        # Calculate the inverse covariance matrix
+        K = calc_cov_matrix(X, ell, sf2)
+        K = K + sn2 * np.eye(N)
+        K = (K + K.T) * 0.5   # Make sure matrix is symmentric
+        try:
+            L = np.linalg.cholesky(K)
+        except np.linalg.LinAlgError:
+            print("K matrix is not positive definit, adding jitter!")
+            K = K + np.eye(N) * 1e-8
+            L = np.linalg.cholesky(K)
+        invL = np.linalg.solve(L, np.eye(N))
+        invK[output, :, :] = np.linalg.solve(L.T, invL)
+        chol[output] = L
+        m = get_mean_function(ca.MX(hyp_opt[output, :]), X.T, func=meanFunc)
+        mean = np.array(m(X.T)).reshape((N,))
+        alpha[output] = np.linalg.solve(L.T, np.linalg.solve(L, Y[:, output] - mean))
+    print('----------------------------------------')
+
+    opt = {}
+    opt['hyper'] = hyp_opt
+    opt['lam_x'] = 0 # Warm start not implemented
+    opt['invK'] = invK
+    opt['alpha'] = alpha
+    opt['chol'] = chol
+    return opt
+
+
+
+# -----------------------------------------------------------------------------
+# Validation of model
+# -----------------------------------------------------------------------------
+
 def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc, alpha=None):
     """ Validate GP model with new test data
     """
@@ -305,14 +519,18 @@ def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc, alpha=None):
                                 gp(invK, ca.MX(X), ca.MX(Y), ca.MX(hyper),
                                    z_s, meanFunc=meanFunc, alpha=alpha))
     loss = 0
+    NLP = 0
 
     for i in range(N):
-        y, var = gp_func(X_test[i, :])
-        loss += (Y_test[i, :] - y)**2
+        mean, var = gp_func(X_test[i, :])
+        loss += (Y_test[i, :] - mean)**2
+        NLP += 0.5*np.log(2*np.pi * (var)) + ((Y_test[i, :] - mean)**2)/(2*var)
+        print(NLP)
+        print(var)
     loss = loss / N
-    standardized_loss = loss/ np.std(Y_test, 0)
+    SMSE = loss/ np.std(Y_test, 0)
+    MNLP = NLP / N
 
-    #TODO: Add negative log porability
 
     print('\n________________________________________')
     print('# Validation of GP model ')
@@ -326,9 +544,13 @@ def validate(X_test, Y_test, X, Y, invK, hyper, meanFunc, alpha=None):
     print('----------------------------------------')
     print('* Standardized mean squared error:')
     for i in range(Ny):
-        print('\t* State %d: %f' % (i + 1, standardized_loss[i]))
+        print('\t* State %d: %f' % (i + 1, SMSE[i]))
     print('----------------------------------------\n')
-    return standardized_loss
+    print('* Mean Negative log Probability:')
+    for i in range(Ny):
+        print('\t* State %d: %f' % (i + 1, MNLP[i]))
+    print('----------------------------------------\n')
+    return SMSE, MNLP
 
 
 """-----------------------------------------------------------------------------
@@ -363,6 +585,3 @@ def standardize(X_original, meanX, stdX):
 def standardize_inverse(X_scaled, meanX, stdX):
     # Scale input and output variables
     return X_scaled * stdX + meanX
-
-
-

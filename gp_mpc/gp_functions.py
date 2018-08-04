@@ -15,17 +15,27 @@ from matplotlib.font_manager import FontProperties
 
 
 def covSEard(x, z, ell, sf2):
-    """ GP squared exponential kernel """
+    """ GP squared exponential kernel
+        Copyright (c) 2018, Helge-André Langåker
+    """
     dist = ca.sum1((x - z)**2 / ell**2)
     return sf2 * ca.SX.exp(-.5 * dist)
 
 
 def get_mean_function(hyper, X, func='zero'):
     """ Get mean function
+        Copyright (c) 2018, Helge-André Langåker
+
+    # Arguments:
+        hyper: Matrix with hyperperameters.
+        X: Input vector or matrix.
+        func: Option for mean function:
                 'zero':       m = 0
                 'const':      m = a
                 'linear':     m(x) = aT*x + b
                 'polynomial': m(x) = aT*x^2 + bT*x + c
+    # Returns:
+         CasADi mean function [m(X, hyper)]
     """
 
     Nx, N = X.shape
@@ -61,6 +71,7 @@ def get_mean_function(hyper, X, func='zero'):
 
 def build_gp(invK, X, hyper, alpha, chol, meanFunc='zero'):
     """ Build Gaussian Process function
+        Copyright (c) 2018, Helge-André Langåker
 
     # Arguments
         invK: Array with the inverse covariance matrices of size (Ny x N x N),
@@ -72,7 +83,8 @@ def build_gp(invK, X, hyper, alpha, chol, meanFunc='zero'):
 
     # Returns
         mean:     GP mean casadi function [mean(z)]
-        covar:    GP covariance casadi function [covar(z)]
+        var:      GP variance casadi function [var(z)]
+        covar:    GP covariance casadi function [covar(z) = diag(var(z))]
         mean_jac: Casadi jacobian of the GP mean function [jac(z)]
     """
 
@@ -129,15 +141,17 @@ def build_gp(invK, X, hyper, alpha, chol, meanFunc='zero'):
 
     mean_func  = ca.Function('mean', [z_s], [mean_temp(z_s, X)])
     covar_func = ca.Function('var',  [z_s], [ca.diag(var_temp(z_s, X))])
+    var_func = ca.Function('var',  [z_s], [var_temp(z_s, X)])
 
     mean_jac_z = ca.Function('mean_jac_z', [z_s],
                                       [ca.jacobian(mean_func(z_s), z_s)])
 
-    return mean_func, covar_func, mean_jac_z
+    return mean_func, var_func, covar_func, mean_jac_z
 
 
 def build_TA_cov(mean, covar, jac, Nx, Ny):
     """ Build 1st order Taylor approximation of covariance function
+        Copyright (c) 2018, Helge-André Langåker
 
     # Arguments:
         mean: GP mean casadi function [mean(z)]
@@ -161,6 +175,7 @@ def build_TA_cov(mean, covar, jac, Nx, Ny):
 
 def gp(invK, X, Y, hyper, inputmean,  alpha=None, meanFunc='zero', log=False):
     """ Gaussian Process
+        Copyright (c) 2018, Helge-André Langåker
 
     # Arguments
         invK: Array with the inverse covariance matrices of size (Ny x N x N),
@@ -244,6 +259,7 @@ def gp(invK, X, Y, hyper, inputmean,  alpha=None, meanFunc='zero', log=False):
 def gp_taylor_approx(invK, X, Y, hyper, inputmean, inputcovar,
                      meanFunc='zero', diag=False, log=False):
     """ Gaussian Process with Taylor Approximation
+        Copyright (c) 2018, Helge-André Langåker
 
     This uses a first order taylor for the mean evaluation (a normal GP mean),
     and a second order taylor for estimating the variance.

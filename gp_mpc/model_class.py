@@ -55,8 +55,9 @@ class Model:
         """ Create integrator """
         # Integrator options
         options = {
-            "abstol" : 1e-6,
-            "reltol" : 1e-6,
+            "abstol" : 1e-5,
+            "reltol" : 1e-9,
+            "max_num_steps": 100,
             "tf" : dt,
         }
         if opt is not None:
@@ -73,9 +74,9 @@ class Model:
             self.__alg0 = ca.Function('alg_0', [x, u],
                                       [alg_0(x, u)])
             dae.update({'z':z, 'alg': alg(x, z, u)})
-            self.Integrator = ca.integrator('Integrator', 'idas', dae, options)
+            self.Integrator = ca.integrator('DEA_Integrator', 'idas', dae, options)
         else:
-            self.Integrator = ca.integrator('Integrator', 'cvodes', dae, options)
+            self.Integrator = ca.integrator('ODE_Integrator', 'cvodes', dae, options)
 
         #TODO: Fix discrete DAE model
         if alg is None:
@@ -147,9 +148,10 @@ class Model:
         Ad = np.array(self.__discrete_rk4_jac_x(x0, u0, p0))
         Bd = np.array(self.__discrete_rk4_jac_u(x0, u0, p0))
         return Ad, Bd
-    
-    def rk4_jacobian(self, x0, u0, p0=[]):
-        """ Linearize the discrete rk4 system around the operating point
+
+
+    def rk4_jacobian_x(self, x0, u0, p0=[]):
+        """ Return state jacobian evaluated at the operating point
             x[k+1] = Ax[k] + Bu[k]
         # Arguments:
             x0: State vector
@@ -157,10 +159,22 @@ class Model:
             p0: Parameter vector (optional)
         """
         return self.__discrete_rk4_jac_x(x0, u0, p0)
-    
+
+
+    def rk4_jacobian_u(self, x0, u0, p0=[]):
+        """ Return input jacobian evaluated at the operating point
+            x[k+1] = Ax[k] + Bu[k]
+        # Arguments:
+            x0: State vector
+            u0: Input vector
+            p0: Parameter vector (optional)
+        """
+        return self.__discrete_rk4_jac_u(x0, u0, p0)
+
+
     def check_rk4_stability(self, x0, u0, d=.1, plot=False):
         """ Check if Runga Kutta 4 method is stable around operating point
-        
+
         # Return True if stable, False if not stable
         """
         A, B = self.linearize(x0, u0, p0=[])
@@ -235,8 +249,10 @@ class Model:
 
         # Arguments:
             x0: Initial state (Nx, 1)
-            u: Input matrix with the input for each timestep in the simulation horizon (Nt, Nu)
-            p: Parameter matrix with the parameters for each timestep in the simulation horizon (Nt, Np)
+            u: Input matrix with the input for each timestep in the
+                simulation horizon (Nt, Nu)
+            p: Parameter matrix with the parameters for each timestep
+                in the simulation horizon (Nt, Np)
             noise: If True, add gaussian noise using the noise covariance matrix
 
         # Output:
@@ -420,7 +436,7 @@ class Model:
 
         fontP = FontProperties()
         fontP.set_size('small')
-        fig = plt.figure()
+        fig = plt.figure(figsize=(9.0, 6.0))
         for i in range(Nx):
             ax = fig.add_subplot(num_rows, num_cols, i + 1)
             ax.plot(t, y_exact[:, i], 'b-', label='Exact')
@@ -429,9 +445,10 @@ class Model:
 #            ax.plot(t, y_lin[:, i], 'y--', label='Linearized RK4')
             ax.set_ylabel(xnames[i])
             ax.legend(prop=fontP, loc='best')
-            ax.set_xlabel('Time')
+            ax.set_xlabel('Time [s]')
         if title is not None:
             fig.canvas.set_window_title(title)
         else:
             fig.canvas.set_window_title('Compare approximations of system model')
+        plt.tight_layout()
         plt.show()

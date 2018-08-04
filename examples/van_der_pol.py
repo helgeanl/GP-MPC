@@ -9,8 +9,6 @@ from __future__ import division
 from __future__ import print_function
 
 from sys import path
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
-#path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.1-64bit")
 path.append(r"./../")
 
 import numpy as np
@@ -35,12 +33,12 @@ def plot_van_der_pol():
     #x_rk4[0] = x0
     gp.set_method('ME')
     for i in range(Nt-1):
-        x_t, cov = gp.predict(x[i], [], cov) 
+        x_t, cov = gp.predict(x[i], [], cov)
         x[i + 1] = np.array(x_t).flatten() #- gp.noise_variance()
         x_sim[i+1] = model.integrate(x0=x_sim[i], u=[], p=[]) #+ np.random.multivariate_normal(
                                    # np.zeros((Nx)), R_n)
     #    x_rk4[i+1] = np.array(model.rk4(x_rk4[i], [],[])).flatten()
-    
+
     plt.figure()
     ax = plt.subplot(111)
     ax.plot(x_sim[:,0], x_sim[:,1], 'k-', linewidth=1.0, label='Exact')
@@ -54,12 +52,12 @@ def plot_van_der_pol():
 
 def ode(x, u, z, p):
     # Model Parameters (Raff, Tobias et al., 2006)
-    mu = -2
+    #mu = 2
     dxdt = [
             x[1],
             -x[0] + mu * (1 - x[0]**2) * x[1]
     ]
-    
+
     return  ca.vertcat(*dxdt)
 
 
@@ -68,7 +66,7 @@ def ode(x, u, z, p):
 solver_opts = {
                 'ipopt.linear_solver' : 'ma27',
                 'ipopt.max_cpu_time' : 10,
-                'expand' : False,
+                'expand' : True,
 }
 
 meanFunc = 'zero'
@@ -84,23 +82,32 @@ xlb = [-4., -6.]
 xub = [4., 6.]
 
 N = 40 # Number of training data
-N_new = 100
+N_new =40
+N_test = 100
 
 # Create simulation model
+mu = 2
 model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R_n, clip_negative=True)
 X, Y           = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
-X_test, Y_test = model.generate_training_data(N_new, uub, ulb, xub, xlb, noise=True)
+X_test, Y_test = model.generate_training_data(N_test, uub, ulb, xub, xlb, noise=True)
+
 
 # Create GP model
-gp = GP(X, Y, mean_func=meanFunc, normalize=True, xlb=xlb, xub=xub, ulb=ulb, 
+gp = GP(X, Y, mean_func=meanFunc, normalize=True, xlb=xlb, xub=xub, ulb=ulb,
         uub=uub, optimizer_opts=solver_opts, multistart=1)
+
 print(gp._GP__hyper)
 #gp.save_model('gp_tank')
 #gp = GP.load_model('gp_tank')
 gp.validate(X_test, Y_test)
 plot_van_der_pol()
-gp.update_data(X_test, Y_test, int(50))
+mu = 5
+model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R_n, clip_negative=True)
+
+X_new, Y_new = model.generate_training_data(N_new, uub, ulb, xub, xlb, noise=True)
+X_test, Y_test = model.generate_training_data(N_test, uub, ulb, xub, xlb, noise=True)
+gp.update_data_all(X_new, Y_new)
+
 gp.validate(X_test, Y_test)
+
 plot_van_der_pol()
-
-

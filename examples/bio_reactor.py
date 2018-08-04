@@ -9,8 +9,6 @@ from __future__ import division
 from __future__ import print_function
 
 from sys import path
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
-#path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.1-64bit")
 path.append(r"./../")
 
 import numpy as np
@@ -88,7 +86,7 @@ def inequality_constraints(x, covar, u, eps):
 solver_opts = {
                 'ipopt.linear_solver' : 'ma27',
                 'ipopt.max_cpu_time' : 10,
-                'expand' : True,
+                'expand' : False,
 }
 
 meanFunc = 'zero'
@@ -135,14 +133,14 @@ xlb = [.0, .0, .0]
 xub = [1., 1., 1.]
 x_sp = np.array([.5, .5, .5])
 
-#mpc = MPC(horizon=12*dt, gp=gp, model=model,
-#          gp_method='ME',
-#          ulb=ulb, uub=uub, xlb=xlb, xub=xub,
-#          terminal_constraint=0, costFunc='quad', feedback=False,
-#          solver_opts=solver_opts, discrete_method='rk4',
-#          inequality_constraints=None
-#          )
-#
-#
-#x, u = mpc.solve(x0, sim_time=15*dt, x_sp=x_sp, debug=False)
-#mpc.plot()
+mpc = MPC(horizon=12*dt, gp=gp, model=model,
+          gp_method='ME',
+          ulb=ulb, uub=uub, xlb=xlb, xub=xub,
+          terminal_constraint=0, costFunc='quad', feedback=False,
+          solver_opts=solver_opts, discrete_method='gp',
+          inequality_constraints=None
+          )
+
+
+x, u = mpc.solve(x0, sim_time=15*dt, x_sp=x_sp, debug=False)
+mpc.plot()

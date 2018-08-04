@@ -14,13 +14,14 @@ import matplotlib.pyplot as plt
 from matplotlib.font_manager import FontProperties
 from .gp_functions import gp_exact_moment, gp_taylor_approx, gp
 from .gp_functions import build_gp, build_TA_cov, get_mean_function
-from .optimize import train_gp, validate
+from .optimize import train_gp, train_gp_numpy
 from .mpc_class import lqr
 
 class GP:
     def __init__(self, X, Y, mean_func="zero", gp_method="TA",
                  optimizer_opts=None, hyper=None, normalize=True, multistart=1,
-                 xlb=None, xub=None, ulb=None, uub=None, meta=None):
+                 xlb=None, xub=None, ulb=None, uub=None, meta=None,
+                 optimize_nummeric=True):
         """ Initialize and optimize GP model
 
         """
@@ -51,8 +52,9 @@ class GP:
         """ Optimize hyperparameters """
         if hyper is None:
             self.optimize(X=X, Y=Y, opts=optimizer_opts, mean_func=mean_func,
-                          xlb=xlb, xub=xub, ulb=ulb, uub=uub, 
-                          multistart=multistart, normalize=normalize)
+                          xlb=xlb, xub=xub, ulb=ulb, uub=uub,
+                          multistart=multistart, normalize=normalize,
+                          optimize_nummeric=optimize_nummeric)
         else:
             self.__hyper  = np.array(hyper['hyper'])
             self.__invK   = np.array(hyper['invK'])
@@ -64,8 +66,9 @@ class GP:
             self.__hyper_mean = np.array(hyper['mean'])
 
         # Build GP
-        self.__mean, self.__covar, self.__mean_jac = build_gp(self.__invK, self.__X,
-                                                     self.__hyper, self.__alpha, self.__chol)
+        self.__mean, self.__var, self.__covar, self.__mean_jac = \
+                                build_gp(self.__invK, self.__X, self.__hyper,
+                                         self.__alpha, self.__chol)
         self.__TA_covar = build_TA_cov(self.__mean, self.__covar,
                                        self.__mean_jac, self.__Nx, self.__Ny)
 
@@ -74,11 +77,12 @@ class GP:
 
     def optimize(self, X=None, Y=None, opts=None, mean_func='zero',
                  xlb=None, xub=None, ulb=None, uub=None,
-                 multistart=1, normalize=True):
+                 multistart=1, normalize=True, warm_start=False,
+                 optimize_nummeric=True):
         self.__mean_func = mean_func
         self.__normalize = normalize
 
-        if normalize:
+        if normalize and X is not None:
             self.__xlb = np.array(xlb)
             self.__xub = np.array(xub)
             self.__ulb = np.array(ulb)
@@ -97,23 +101,38 @@ class GP:
 
         if X is not None:
             X = np.array(X).copy()
-            self.__X = X.copy()
+            if normalize and X is not None:
+                self.__X = self.standardize(X, self.__meanZ, self.__stdZ)
+            else:
+                self.__X = X.copy()
         else:
             X = self.__X.copy()
         if Y is not None:
             Y = np.array(Y).copy()
-            self.__Y = Y.copy()
+            if normalize and X is not None:
+                self.__Y = self.standardize(Y, self.__meanY, self.__stdY)
+            else:
+                self.__Y = Y.copy()
         else:
             Y = self.__Y.copy()
 
-        if normalize:
-            self.__Y = self.standardize(Y, self.__meanY, self.__stdY)
-#            self.__X = self.normalize(self.__X, self.__lb, self.__ub)
-            self.__X = self.standardize(X, self.__meanZ, self.__stdZ)
+        if warm_start:
+            hyp_init = self.__hyper
+            lam_x = self.__lam_x
+        else:
+            hyp_init = None
+            lam_x = None
+        if optimize_nummeric:
+            opt = train_gp_numpy(self.__X, self.__Y, meanFunc=self.__mean_func,
+                               optimizer_opts=opts, multistart=multistart,
+                               hyper_init=hyp_init)
+        else:
+            opt = train_gp(self.__X, self.__Y, meanFunc=self.__mean_func,
+                               optimizer_opts=opts, multistart=multistart,
+                               hyper_init=hyp_init, lam_x0=lam_x)
 
-        opt = train_gp(self.__X, self.__Y, meanFunc=self.__mean_func,
-                           optimizer_opts=opts, multistart=multistart)
         self.__hyper = opt['hyper']
+        self.__lam_x = opt['lam_x']
         self.__invK  = opt['invK']
         self.__alpha = opt['alpha']
         self.__chol  = opt['chol']
@@ -124,20 +143,66 @@ class GP:
 
 
     def validate(self, X_test, Y_test):
-        """ Validate GP model with test data """
+        """ Validate GP model with test data
+        """
+
         Y_test = Y_test.copy()
         X_test = X_test.copy()
         if self.__normalize:
             Y_test = self.standardize(Y_test, self.__meanY, self.__stdY)
-#            X_test = self.normalize(X_test, self.__lb, self.__ub)
             X_test = self.standardize(X_test, self.__meanZ, self.__stdZ)
-        SMSE = validate(X_test, Y_test, self.__X, self.__Y, self.__invK,
-                        self.__hyper, self.__mean_func)
+
+        N, Ny = Y_test.shape
+        loss = 0
+        NLP = 0
+
+        for i in range(N):
+            mean = self.__mean(X_test[i, :])
+            var = self.__var(X_test[i, :]) + self.noise_variance()
+            loss += (Y_test[i, :] - mean)**2
+            NLP += 0.5*np.log(2*np.pi * (var)) + ((Y_test[i, :] - mean)**2)/(2*var)
+
+        loss = loss / N
+        SMSE = loss/ np.std(Y_test, 0)
+        MNLP = NLP / N
+
+        print('\n________________________________________')
+        print('# Validation of GP model ')
+        print('----------------------------------------')
+        print('* Num training samples: ' + str(self.__N))
+        print('* Num test samples: ' + str(N))
+        print('----------------------------------------')
+        print('* Mean squared error: ')
+        for i in range(Ny):
+            print('\t- State %d: %f' % (i + 1, loss[i]))
+        print('----------------------------------------')
+        print('* Standardized mean squared error:')
+        for i in range(Ny):
+            print('\t* State %d: %f' % (i + 1, SMSE[i]))
+        print('----------------------------------------')
+        print('* Mean Negative log Probability:')
+        for i in range(Ny):
+            print('\t* State %d: %f' % (i + 1, MNLP[i]))
+        print('----------------------------------------\n')
+
         self.__SMSE = np.max(SMSE)
+
+        return np.array(SMSE).flatten(), np.array(MNLP).flatten()
 
 
     def set_method(self, gp_method='TA'):
-        """ Select wich GP function to use """
+        """ Select wich GP function to use
+
+        # Arguments:
+            gp_method: Method for propagating uncertainty.
+                        'ME': Mean Equivalence (normal GP),
+                        'TA': 1st order Tayolor Approximation,
+                        'EM': 1st and 2nd Expected Moments,
+                        'old_ME': non-optimized ME function,
+                        'old_TA': non-optimzed TA function. Use 2nd order
+                                    TA, but don't take into account covariance
+                                    between states.
+        """
 
         x = ca.MX.sym('x', self.__Ny)
         covar_s = ca.MX.sym('covar', self.__Nx, self.__Nx)
@@ -178,11 +243,16 @@ class GP:
 
 
     def predict(self, x, u, cov):
+        """ Predict future state
+
+        # Arguments:
+            x: State vector (Nx x 1)
+            u: Input vector (Nu x 1)
+            cov: Covariance matrix of input z=[x, u] (Nx+nu x Nx+Nu)
+        """
         if self.__normalize:
             x_s = self.standardize(x, self.__meanX, self.__stdX)
             u_s = self.standardize(u, self.__meanU, self.__stdU)
-#            x_s = self.normalize(x, self.__xlb, self.__xub)
-#            u_s = self.normalize(u, self.__ulb, self.__uub)
         else:
             x_s = x
             u_s = u
@@ -191,27 +261,6 @@ class GP:
             mean = self.inverse_mean(mean, self.__meanY, self.__stdY)
 #            cov = self.inverse_covariance(cov, self.__stdY)
         return mean, cov
-
-
-    def kernel(self, x, z):
-        """ GP squared exponential kernel """
-        ell = self.__hyper_length_scales
-        sf2 = self.__hyper_signal_variance
-        sqdist = np.sum(x**2,1).reshape(-1,1) + np.sum(z**2,1) - 2*np.dot(x, z.T)
-        return sf2 * np.exp(-.5 * (1/ell) * sqdist)
-
-
-    def cov_matrix(self, X, X_new, ell, sf2):
-        """ GP squared exponential kernel """
-        dist = 0
-        n1, D = X.shape
-        n2, D = X_new.shape
-        for i in range(D):
-            x1 = X[:, i].reshape(n1, 1)
-            x2 = X_new[:, i].reshape(n2, 1)
-            dist = (np.sum(x1**2, 1).reshape(-1, 1) + np.sum(x2**2, 1) -
-                2 * np.dot(x1, x2.T)) / ell[i]**2 + dist
-        return sf2 * np.exp(-.5 * dist)
 
 
     def get_size(self):
@@ -227,7 +276,7 @@ class GP:
 
     def get_hyper_parameters(self):
         """ Get hyper-parameters
-        
+
         # Return:
             hyper: Dictionary containing the hyper-parameters,
                     'length_scale', 'signal_var', 'noise_var', 'mean'
@@ -241,12 +290,113 @@ class GP:
         return hyper
 
 
-#TODO: Fix this
-    def update_data(self, X_new, Y_new, N_new=None):
-        """ Update training data exploiting unseen data
-        
+    def print_hyper_parameters(self):
+        """ Print out all hyperparameters
         """
-        
+        print('\n________________________________________')
+        print('# Hyper-parameters')
+        print('----------------------------------------')
+        print('* Num samples:', self.__N)
+        print('* Ny:', self.__Ny)
+        print('* Nu:', self.__Nu)
+        print('* Normalization:', self.__normalize)
+        for state in range(self.__Ny):
+            print('----------------------------------------')
+            print('* Lengthscale: ', state)
+            for i in range(self.__Ny + self.__Nu):
+                print(('-- l{a}: {l}').format(a=i,l=self.__hyper_length_scales[state, i]))
+            print('* Signal variance: ', state)
+            print('-- sf2:', self.__hyper_signal_variance[state])
+            print('* Noise variance: ', state)
+            print('-- sn2:', self.__hyper_noise_variance[state])
+        print('----------------------------------------')
+
+    def covSEard(self, X, Z, ell, sf2):
+        """ GP Squared Exponential Kernel
+
+        # Arguments:
+            X: Input matrix or vector (n_x x D)
+            Z: Input matrix or vector (n_z x D)
+            ell: Lengthscale vector (D x 1)
+            sf2: Signal variance (scalar)
+
+        # Returns:
+            k(X,Z): Covariance between X and Z.
+        """
+        dist = 0
+
+        if X.ndim > 1:
+            n1, D = X.shape
+        else:
+            D = X.shape[0]
+            n1 = 1
+            X.shape = (n1, D)
+
+        if Z.ndim > 1:
+            n2, D2 = Z.shape
+        else:
+            D2 = Z.shape[0]
+            n2 = 1
+            Z.shape = (n2, D2)
+
+        if D != D2:
+            raise ValueError('Input dimensions are not the same! D_x=' + str(D)
+                            + ', D_z=' + str(D2))
+        for i in range(D):
+            x1 = X[:, i].reshape(n1, 1)
+            x2 = Z[:, i].reshape(n2, 1)
+            dist = (np.sum(x1**2, 1).reshape(-1, 1) + np.sum(x2**2, 1) -
+                2 * np.dot(x1, x2.T)) / ell[i]**2 + dist
+        return sf2 * np.exp(-.5 * dist)
+
+
+    def covar(self, X_new):
+        """ Compute covariance of input data
+
+        # Arguments:
+            X_new: Input matrix or vector of size (n x D), with n samples,
+                    and D inputs.
+        # Returns:
+            covar: Covariance between the samples for all the inputs
+                    (D x (n x n)).
+        """
+
+        if X_new.ndim > 1:
+            n, D = X_new.shape
+            covar = np.zeros((D,n,n))
+        else:
+            D = X_new.shape[0]
+            n = 1
+            X_new.shape = (n, D)
+            covar = np.zeros((D,n))
+
+        for output in range(self.__Ny):
+            ell = self.__hyper_length_scales[output]
+            sf2 = self.__hyper_signal_variance[output]
+            L = self.__chol[output]
+            ks = self.covSEard(self.__X, X_new, ell, sf2)
+            kss = sf2
+            v = np.linalg.solve(L, ks)
+            covar[output] = kss - v.T @ v
+        return covar
+
+
+    def update_data(self, X_new, Y_new, N_new=None):
+        """ Update training data with new observations
+
+        Will update training data with N_new samples, updating the
+        cholesky covariance matrix, alpha, inverse covariance, and re-build
+        the GP functions with the updated matrices.
+
+        # Arguments:
+            X_new: Input matrix with (n x Nx) new observations.
+            Y_new: Corresponding measurments (n x Ny) from input X_new.
+            N_new: Number of new samples to pick, default to N_new=n.
+
+
+        # NOTE: NOT working as intended...
+        """
+
         X_new = np.array(X_new).copy()
         Y_new = np.array(Y_new).copy()
         n, D = X_new.shape
@@ -257,62 +407,223 @@ class GP:
             Y_new = self.standardize(Y_new, self.__meanY, self.__stdY)
             X_new = self.standardize(X_new, self.__meanZ, self.__stdZ)
 
-        # Exploit datapoint with the most variance
+        print('\n________________________________________')
+        print('# Updating training data with ' + str(N_new) + ' new samples')
+        print('----------------------------------------')
         for k in range(N_new):
+            """ Explore point with highest combined variance """
             n, D = X_new.shape
-            var = np.zeros((n,))
-            for i in range(n):
-                cov = self.__covar(X_new[i])
-                var[i] = np.trace(cov)
+
+            covar = self.covar(X_new)
+            covar = np.sum(covar, 0) # Sum covariance of all states
+            var = np.diag(covar)
+
             max_var_index = np.argmin(var)
-            self.__X = np.vstack([self.__X, X_new[max_var_index]])
-            self.__Y = np.vstack([self.__Y, Y_new[max_var_index]])
-            self.__N = self.__X.shape[0]
+            x_new = X_new[max_var_index]
+            y_new = Y_new[max_var_index]
             X_new = np.delete(X_new, max_var_index, 0)
             Y_new = np.delete(Y_new, max_var_index, 0)
-        
-        # Pre-compute matrices again
+
+            """ Update matrices """
+            N, D = self.__X.shape
+            hyper = self.__hyper
+            invK  = np.zeros((self.__Ny, N + 1, N + 1))
+            alpha = np.zeros((self.__Ny, N + 1))
+            chol  = np.zeros((self.__Ny, N + 1, N + 1))
+            chol[:, :N, :N] = self.__chol
+
+            for output in range(self.__Ny):
+                ell = self.__hyper_length_scales[output]
+                sf2 = self.__hyper_signal_variance[output]
+                sn2 = self.__hyper_noise_variance[output]
+                K_new   = self.covSEard(self.__X, x_new, ell, sf2)
+                k_new__ = self.covSEard(x_new, x_new, ell, sf2) + sn2
+                L = self.__chol[output]
+                l_new = np.linalg.solve(L, K_new)
+                l_new__ = np.sqrt(k_new__ - np.linalg.norm(l_new))
+                chol[output, N:, :N] = l_new.T
+                chol[output, N, N] = l_new__
+                invL = np.linalg.solve(chol[output], np.eye(N + 1))
+                invK[output, :, :] = np.linalg.solve(chol[output].T, invL)
+
+            self.__X = np.vstack([self.__X, x_new])
+            self.__Y = np.vstack([self.__Y, y_new])
+            self.__N = self.__X.shape[0]
+
+            for output in range(self.__Ny):
+                m = get_mean_function(ca.MX(hyper[output, :]),
+                                      self.__X.T, func=self.__mean_func)
+                mean = np.array(m(self.__X.T)).reshape((self.__N + 1,))
+                alpha[output] = np.linalg.solve(chol[output].T,
+                                     np.linalg.solve(chol[output],
+                                     self.__Y[:, output] - mean))
+            self.__alpha = alpha
+            self.__chol = chol
+            self.__invK = invK
+
+            # Rebuild GP with the new data
+            self.__mean, self.__var, self.__covar, self.__mean_jac = \
+                                build_gp(self.__invK, self.__X, self.__hyper,
+                                         self.__alpha, self.__chol)
+            print('* Update ' + str(k) + ' with new data point ' +str(max_var_index))
+        self.__TA_covar = build_TA_cov(self.__mean, self.__covar,
+                                       self.__mean_jac, self.__Nx, self.__Ny)
+        self.set_method(self.__gp_method)
+
+
+    def update_data_all(self, X_new, Y_new):
+        """ Update training data with all new observations
+
+        Will update training data with all samples, updating the
+        cholesky covariance matrix, alpha, inverse covariance, and re-build
+        the GP functions with the updated matrices.
+
+        # Arguments:
+            X_new: Input matrix with (n x Nx) new observations.
+            Y_new: Corresponding measurments (n x Ny) from input X_new.
+        """
+
+        X_new = np.array(X_new).copy()
+        Y_new = np.array(Y_new).copy()
+        n, D = X_new.shape
+
+        N_new = n
+
+        if self.__normalize:
+            Y_new = self.standardize(Y_new, self.__meanY, self.__stdY)
+            X_new = self.standardize(X_new, self.__meanZ, self.__stdZ)
+
+        print('\n________________________________________')
+        print('# Updating training data with ' + str(N_new) + ' new samples')
+        print('----------------------------------------')
+
+        """ Explore point with highest combined variance """
+        n, D = X_new.shape
+
+        """ Update matrices """
+        self.__X = np.vstack([self.__X, X_new])
+        self.__Y = np.vstack([self.__Y, Y_new])
+        self.__N = self.__X.shape[0]
+
         N, D = self.__X.shape
         hyper = self.__hyper
-        invK = np.zeros((self.__Ny, N, N))
-        alpha = np.zeros((self.__Ny, N))
-        chol = np.zeros((self.__Ny, N, N))
-        for output in range(self.__Ny):    
+
+        invK  = np.zeros((self.__Ny, N , N ))
+        alpha = np.zeros((self.__Ny, N ))
+        chol  = np.zeros((self.__Ny, N , N ))
+
+
+        for output in range(self.__Ny):
             ell = self.__hyper_length_scales[output]
             sf2 = self.__hyper_signal_variance[output]
             sn2 = self.__hyper_noise_variance[output]
-            dist = 0
-            for i in range(D):
-                x = self.__X[:, i].reshape(N, 1)
-                dist = (np.sum(x**2, 1).reshape(-1, 1) + np.sum(x**2, 1) -
-                        2 * np.dot(x, x.T)) / ell[i]**2 + dist
-            K = sf2 * np.exp(-.5 * dist)
-            
-            K = K + sn2 * np.eye(N)     # Add noise variance to diagonal
-            K = (K + K.T) * 0.5         # Make sure matrix is symmentric
+            K_new   = self.covSEard(self.__X, self.__X, ell, sf2)
+
+            K = K_new + sn2 * np.eye(self.__N)
+            K = (K + K.T) * 0.5   # Make sure matrix is symmentric
             try:
                 L = np.linalg.cholesky(K)
             except np.linalg.LinAlgError:
                 print("K matrix is not positive definit, adding jitter!")
                 K = K + np.eye(N) * 1e-8
                 L = np.linalg.cholesky(K)
-            invL = np.linalg.solve(L, np.eye(N))
+            invL = np.linalg.solve(L, np.eye(self.__N))
             invK[output, :, :] = np.linalg.solve(L.T, invL)
             chol[output] = L
-            m = get_mean_function(ca.MX(hyper[output, :]), self.__X.T, func=self.__mean_func)
-            mean = np.array(m(self.__X.T)).reshape((N,))
-            alpha[output] = np.linalg.solve(L.T, np.linalg.solve(L, self.__Y[:, output] - mean))
+            m = get_mean_function(ca.MX(hyper[output, :]), self.__X.T,
+                                    func=self.__mean_func)
+            mean = np.array(m(self.__X.T)).reshape((self.__N,))
+            alpha[output] = np.linalg.solve(L.T,
+                                    np.linalg.solve(L, self.__Y[:, output] - mean))
+
         self.__alpha = alpha
         self.__chol = chol
         self.__invK = invK
-            
+
         # Rebuild GP with the new data
-        self.__mean, self.__covar, self.__mean_jac = build_gp(self.__invK, self.__X,
-                                                     self.__hyper, self.__alpha, self.__chol)
+        self.__mean, self.__var, self.__covar, self.__mean_jac = \
+                            build_gp(self.__invK, self.__X, self.__hyper,
+                                     self.__alpha, self.__chol)
+
         self.__TA_covar = build_TA_cov(self.__mean, self.__covar,
                                        self.__mean_jac, self.__Nx, self.__Ny)
         self.set_method(self.__gp_method)
-            
+
+
+    def replace_data_all(self, X_new, Y_new):
+        """ Replace training data with new observations
+
+        Will replace training data with new samples, replacing the
+        cholesky covariance matrix, alpha, inverse covariance, and re-build
+        the GP functions with the updated matrices.
+
+        # Arguments:
+            X_new: Input matrix with (n x Nx) new observations.
+            Y_new: Corresponding measurments (n x Ny) from input X_new.
+        """
+
+        X_new = np.array(X_new).copy()
+        Y_new = np.array(Y_new).copy()
+        n, D = X_new.shape
+
+        N_new = n
+
+        if self.__normalize:
+            Y_new = self.standardize(Y_new, self.__meanY, self.__stdY)
+            X_new = self.standardize(X_new, self.__meanZ, self.__stdZ)
+
+        print('\n________________________________________')
+        print('# Replacing training data with ' + str(N_new) + ' new samples')
+        print('----------------------------------------')
+
+        """ Update matrices """
+        self.__X = X_new
+        self.__Y = Y_new
+        self.__N = self.__X.shape[0]
+
+        N, D = self.__X.shape
+        hyper = self.__hyper
+
+        invK  = np.zeros((self.__Ny, N , N ))
+        alpha = np.zeros((self.__Ny, N ))
+        chol  = np.zeros((self.__Ny, N , N ))
+
+
+        for output in range(self.__Ny):
+            ell = self.__hyper_length_scales[output]
+            sf2 = self.__hyper_signal_variance[output]
+            sn2 = self.__hyper_noise_variance[output]
+            K_new   = self.covSEard(self.__X, self.__X, ell, sf2)
+
+            K = K_new + sn2 * np.eye(self.__N)
+            K = (K + K.T) * 0.5   # Make sure matrix is symmentric
+            try:
+                L = np.linalg.cholesky(K)
+            except np.linalg.LinAlgError:
+                print("K matrix is not positive definit, adding jitter!")
+                K = K + np.eye(N) * 1e-8
+                L = np.linalg.cholesky(K)
+            invL = np.linalg.solve(L, np.eye(self.__N))
+            invK[output, :, :] = np.linalg.solve(L.T, invL)
+            chol[output] = L
+            m = get_mean_function(ca.MX(hyper[output, :]), self.__X.T,
+                                    func=self.__mean_func)
+            mean = np.array(m(self.__X.T)).reshape((self.__N,))
+            alpha[output] = np.linalg.solve(L.T,
+                                    np.linalg.solve(L, self.__Y[:, output] - mean))
+
+        self.__alpha = alpha
+        self.__chol = chol
+        self.__invK = invK
+
+        # Rebuild GP with the new data
+        self.__mean, self.__var, self.__covar, self.__mean_jac = \
+                            build_gp(self.__invK, self.__X, self.__hyper,
+                                     self.__alpha, self.__chol)
+
+        self.__TA_covar = build_TA_cov(self.__mean, self.__covar,
+                                       self.__mean_jac, self.__Nx, self.__Ny)
+        self.set_method(self.__gp_method)
 
 
     def standardize(self, Y, mean, std):
@@ -322,9 +633,13 @@ class GP:
         return (u - lb) / (ub - lb)
 
     def inverse_mean(self, x, mean, std):
+        """ Inverse standardization of the mean
+        """
         return (x * std) + mean
 
     def inverse_variance(self, variance):
+        """ Inverse standardization of the variance
+        """
 #        return (covariance[..., np.newaxis] * self.__stdY**2)
         return variance * self.__stdY**2
 
@@ -337,8 +652,12 @@ class GP:
             u0: Input vector
             cov0: Covariance
         """
+        if self.__normalize:
+            x0 = self.standardize(x0, self.__meanX, self.__stdX)
+            u0 = self.standardize(u0, self.__meanU, self.__stdU)
         Ad = np.array(self.__discrete_jac_x(x0, u0, cov0))
         Bd = np.array(self.__discrete_jac_u(x0, u0, cov0))
+
         return Ad, Bd
 
 
@@ -368,11 +687,12 @@ class GP:
         # Arguments:
             M: Reduce the model size from N to M.
         """
-        
-        
-        
+
+
+
     def __to_dict(self):
-        """ Store model data in a struct """
+        """ Store model data in a dictionary """
+
         gp_dict = {}
         gp_dict['X'] = self.__X.tolist()
         gp_dict['Y'] = self.__Y.tolist()
@@ -425,7 +745,7 @@ class GP:
 
     def predict_compare(self, x0, u, model, num_cols=2, xnames=None,
                         title=None, feedback=False, x_ref = None,
-                        Q=None, R=None):
+                        Q=None, R=None, methods=None):
         """ Predict and compare all GP methods
         """
         # Predict future
@@ -436,29 +756,34 @@ class GP:
         Nt = np.size(u, 0)
         sim_time = Nt * dt
         initVar = self.__hyper[:,Nx + 1]**2
-        methods = ['EM', 'TA', 'ME']
+        if methods is None:
+            methods = ['EM', 'TA', 'ME']
         color = ['k', 'y', 'r']
         mean = np.zeros((len(methods), Nt + 1 , Ny))
         var = np.zeros((len(methods), Nt + 1, Ny))
-        covar = np.eye(Nx) * 1e-5 # Initial covar input matrix
+        covar = np.eye(Nx) * 1e-6 # Initial covar input matrix
         if Q is None:
             Q = np.eye(Ny)
         if R is None:
             R= np.eye(Nx - Ny)
-        
+
         if x_ref is None and feedback:
             x_ref = np.zeros((Ny))
-        
+
         if feedback:
-                A, B = self.discrete_linearize(x0, u[0], covar)
-                K, S, E = lqr(A, B, Q, R)
-    
+            A, B = self.discrete_linearize(x0, u[0], covar)
+            K, S, E = lqr(A, B, Q, R)
+
         for i in range(len(methods)):
             self.set_method(methods[i])
             mean_t = x0
             covar[:Ny, :Ny] = ca.diag(initVar)
             mean[i, 0, :] = x0
-            
+            u_t = u[0]
+
+            A, B = self.discrete_linearize(mean_t, u_t, covar)
+            K, P, E = lqr(A, B, Q, R)
+
             for t in range(1, Nt + 1):
                 if feedback:
                     u_t = K @ (mean_t - x_ref)
@@ -467,7 +792,9 @@ class GP:
                 mean_t, covar_x = self.predict(mean_t, u_t, covar)
                 mean[i, t, :] = np.array(mean_t).reshape((Ny,))
                 var[i, t, :] = np.diag(covar_x)
-                
+                if self.__normalize:
+                    var[i, t, :] = self.inverse_variance(var[i, t, :])
+
                 if feedback:
                     covar_u = K @ covar_x @ K.T
                     cov_xu = covar_x @ K.T
@@ -475,24 +802,44 @@ class GP:
                     covar[Ny:, :Ny] = cov_xu.T
                     covar[:Ny, Ny:] = cov_xu
                 covar[:Ny, :Ny] = covar_x
-                
+
+        #TODO: Fix feedback
+        if feedback:
+            A, B = model.discrete_linearize(x0, u[0])
+            K, P, E = lqr(A, B, Q, R)
+            y_sim = np.zeros((Nt + 1 , Ny))
+            y_sim[0] = x0
+            y_t = x0
+            for t in range(1, Nt + 1):
+                if 0: #feedback:
+                    u_t = K @ (y_t - x_ref)
+                else:
+                    u_t = u[t-1, :]
+                y_t = model.integrate(x0, u_t, []).flatten()
+                y_sim[t] = y_t
+        else:
+            y_sim = model.sim(x0, u)
+            y_sim = np.vstack([x0, y_sim])
 
         t = np.linspace(0.0, sim_time, Nt + 1)
-        Y_sim = model.sim(x0, u)
-        Y_sim = np.vstack([x0, Y_sim])
+
         if np.any(var < 0):
             var = var.clip(min=0)
 
         num_rows = int(np.ceil(Ny / num_cols))
         if xnames is None:
             xnames = ['State %d' % (i + 1) for i in range(Ny)]
+        if x_ref is not None:
+            x_sp = x_ref * np.ones((Nt+1, Ny))
 
         fontP = FontProperties()
         fontP.set_size('small')
-        fig = plt.figure()
+        fig = plt.figure(figsize=(9.0, 6.0))
         for i in range(Ny):
             ax = fig.add_subplot(num_rows, num_cols, i + 1)
-            ax.plot(t, Y_sim[:, i], 'b-', label='Simulation')
+            ax.plot(t, y_sim[:, i], 'b-', label='Simulation')
+            if x_ref is not None:
+                ax.plot(t, x_sp[:, i], color='g', linestyle='--', label='Setpoint')
 
             for k in range(len(methods)):
                 mean_i = mean[k, :, i]
@@ -501,13 +848,14 @@ class GP:
                              label='GP ' + methods[k])
             ax.set_ylabel(xnames[i])
             ax.legend(prop=fontP, loc='best')
-            ax.set_xlabel('Time')
-            ax.set_ylim([-20,20])
+            ax.set_xlabel('Time [s]')
+    #        ax.set_ylim([-20,20])
         if title is not None:
             fig.canvas.set_window_title(title)
         else:
             fig.canvas.set_window_title(('Training data: {x},  Mean Function: {y},  '
                                          'Normalize: {q}, Feedback: {f}'
-                                         ).format(x=self.__N, y=self.__mean_func, 
+                                         ).format(x=self.__N, y=self.__mean_func,
                                          q=self.__normalize, f=feedback))
+        plt.tight_layout()
         plt.show()

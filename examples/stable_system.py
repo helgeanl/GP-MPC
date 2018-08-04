@@ -9,12 +9,11 @@ from __future__ import division
 from __future__ import print_function
 
 from sys import path
-path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.0")
-#path.append(r"C:\Users\helgeanl\Google Drive\NTNU\Masteroppgave\casadi-py36-v3.4.1-64bit")
 path.append(r"./../")
 
 import numpy as np
 import casadi as ca
+import pyDOE
 import matplotlib.pyplot as plt
 from gp_mpc import Model, GP, MPC, plot_eig, lqr
 
@@ -26,7 +25,7 @@ def plot_system():
     x = np.zeros((Nt,2))
     x_sim = np.zeros((Nt,2))
     #x_rk4 = np.zeros((Nt,2))
-    
+
     x[0] = x0
     x_sim[0] = x0
     #x_rk4[0] = x0
@@ -35,7 +34,7 @@ def plot_system():
         x[i + 1] = np.array(x_t).flatten()
         x_sim[i+1] = model.integrate(x0=x_sim[i], u=[], p=[])
     #    x_rk4[i+1] = np.array(model.rk4(x_rk4[i], [],[])).flatten()
-    
+
     plt.figure()
     ax = plt.subplot(111)
     ax.plot(x_sim[:,0], x_sim[:,1], 'k-', linewidth=1.0, label='Exact')
@@ -58,9 +57,9 @@ def ode(x, u, z, p):
     a22 = -3.
     dxdt = [
             a11 * x[0] + a12 * x[1] ,
-            a21 * x[0] + a22 * x[1] 
+            a21 * x[0] + a22 * x[1]
     ]
-    
+
     return  ca.vertcat(*dxdt)
 
 
@@ -74,7 +73,7 @@ meanFunc = 'zero'
 dt = .01
 Nx = 2
 Nu = 0
-R = np.eye(Nx) * 1e-6 
+R = np.eye(Nx) * 1e-6
 
 # Limits in the training data
 ulb = []
@@ -90,11 +89,10 @@ X, Y           = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 X_test, Y_test = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
 
 # Create GP model
-gp = GP(X, Y, mean_func=meanFunc, normalize=False, xlb=xlb, xub=xub, ulb=ulb, 
+gp = GP(X, Y, mean_func=meanFunc, normalize=False, xlb=xlb, xub=xub, ulb=ulb,
         uub=uub, optimizer_opts=solver_opts, multistart=1)
 print(gp._GP__hyper)
 #gp.save_model('gp_tank')
 #gp = GP.load_model('gp_tank')
 gp.validate(X_test, Y_test)
-plot_system()
-
+#plot_system()
