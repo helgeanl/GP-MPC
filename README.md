@@ -16,3 +16,6 @@ As a model in the MPC algorithm it is possible to use an exact integrator from S
 ### Requirements
 * Python > 3.5
 * CasADi (tested with version 3.4)
+
+
+![alt text](https://github.com/helgeanl/GP-MPC/blob/master/docs/gp.png "Gaussian Process regression")
