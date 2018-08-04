@@ -52,7 +52,7 @@ def plot_van_der_pol():
 
 def ode(x, u, z, p):
     # Model Parameters (Raff, Tobias et al., 2006)
-    mu = -2
+    #mu = 2
     dxdt = [
             x[1],
             -x[0] + mu * (1 - x[0]**2) * x[1]
@@ -66,7 +66,7 @@ def ode(x, u, z, p):
 solver_opts = {
                 'ipopt.linear_solver' : 'ma27',
                 'ipopt.max_cpu_time' : 10,
-                'expand' : False,
+                'expand' : True,
 }
 
 meanFunc = 'zero'
@@ -82,21 +82,32 @@ xlb = [-4., -6.]
 xub = [4., 6.]
 
 N = 40 # Number of training data
-N_new = 100
+N_new =40
+N_test = 100
 
 # Create simulation model
+mu = 2
 model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R_n, clip_negative=True)
 X, Y           = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
-X_test, Y_test = model.generate_training_data(N_new, uub, ulb, xub, xlb, noise=True)
+X_test, Y_test = model.generate_training_data(N_test, uub, ulb, xub, xlb, noise=True)
+
 
 # Create GP model
 gp = GP(X, Y, mean_func=meanFunc, normalize=True, xlb=xlb, xub=xub, ulb=ulb,
         uub=uub, optimizer_opts=solver_opts, multistart=1)
+
 print(gp._GP__hyper)
 #gp.save_model('gp_tank')
 #gp = GP.load_model('gp_tank')
 gp.validate(X_test, Y_test)
 plot_van_der_pol()
-gp.update_data(X_test, Y_test, int(50))
+mu = 5
+model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R_n, clip_negative=True)
+
+X_new, Y_new = model.generate_training_data(N_new, uub, ulb, xub, xlb, noise=True)
+X_test, Y_test = model.generate_training_data(N_test, uub, ulb, xub, xlb, noise=True)
+gp.update_data_all(X_new, Y_new)
+
 gp.validate(X_test, Y_test)
+
 plot_van_der_pol()

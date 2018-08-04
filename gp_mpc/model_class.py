@@ -436,7 +436,7 @@ class Model:
 
         fontP = FontProperties()
         fontP.set_size('small')
-        fig = plt.figure()
+        fig = plt.figure(figsize=(9.0, 6.0))
         for i in range(Nx):
             ax = fig.add_subplot(num_rows, num_cols, i + 1)
             ax.plot(t, y_exact[:, i], 'b-', label='Exact')
@@ -445,9 +445,10 @@ class Model:
 #            ax.plot(t, y_lin[:, i], 'y--', label='Linearized RK4')
             ax.set_ylabel(xnames[i])
             ax.legend(prop=fontP, loc='best')
-            ax.set_xlabel('Time')
+            ax.set_xlabel('Time [s]')
         if title is not None:
             fig.canvas.set_window_title(title)
         else:
             fig.canvas.set_window_title('Compare approximations of system model')
+        plt.tight_layout()
         plt.show()

@@ -285,7 +285,8 @@ class MPC:
             cov_x_next_s[:Ny_gp, :Ny_gp] = covar_d_sx
             #TODO: Missing kinematic states
             covar_x_next_func = ca.Function( 'cov',
-                                [mean_s, u_s, covar_d_sx, covar_x_sx],
+                                #[mean_s, u_s, covar_d_sx, covar_x_sx],
+                                [covar_d_sx],
                                 [cov_x_next_s])
 
             """ f_hybrid output covariance matrix """
@@ -396,8 +397,9 @@ class MPC:
                 mean_d, covar_d = self.__gp.predict(mean_t[:Ny_gp], u_t, covar_t)
                 mean_next_pred = ca.vertcat(mean_d, hybrid.rk4(mean_t[Ny_gp:],
                                                     mean_t[:Ny_gp], []))
-                covar_x_next_pred = covar_x_next_func(mean_t, u_t, covar_d,
-                                                        covar_x_t)
+                #covar_x_next_pred = covar_x_next_func(mean_t, u_t, covar_d,
+                #                                        covar_x_t)
+                covar_x_next_pred = covar_x_next_func(covar_d )
             elif discrete_method is 'f_hybrid':
                 #TODO: Hybrid GP model estimating model error
                 N_gp, Ny_gp, Nu_gp = self.__gp.get_size()

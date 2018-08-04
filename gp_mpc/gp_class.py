@@ -290,6 +290,27 @@ class GP:
         return hyper
 
 
+    def print_hyper_parameters(self):
+        """ Print out all hyperparameters
+        """
+        print('\n________________________________________')
+        print('# Hyper-parameters')
+        print('----------------------------------------')
+        print('* Num samples:', self.__N)
+        print('* Ny:', self.__Ny)
+        print('* Nu:', self.__Nu)
+        print('* Normalization:', self.__normalize)
+        for state in range(self.__Ny):
+            print('----------------------------------------')
+            print('* Lengthscale: ', state)
+            for i in range(self.__Ny + self.__Nu):
+                print(('-- l{a}: {l}').format(a=i,l=self.__hyper_length_scales[state, i]))
+            print('* Signal variance: ', state)
+            print('-- sf2:', self.__hyper_signal_variance[state])
+            print('* Noise variance: ', state)
+            print('-- sn2:', self.__hyper_noise_variance[state])
+        print('----------------------------------------')
+
     def covSEard(self, X, Z, ell, sf2):
         """ GP Squared Exponential Kernel
 
@@ -371,6 +392,9 @@ class GP:
             X_new: Input matrix with (n x Nx) new observations.
             Y_new: Corresponding measurments (n x Ny) from input X_new.
             N_new: Number of new samples to pick, default to N_new=n.
+
+
+        # NOTE: NOT working as intended...
         """
 
         X_new = np.array(X_new).copy()
@@ -429,7 +453,7 @@ class GP:
             for output in range(self.__Ny):
                 m = get_mean_function(ca.MX(hyper[output, :]),
                                       self.__X.T, func=self.__mean_func)
-                mean = np.array(m(self.__X.T)).reshape((N + 1,))
+                mean = np.array(m(self.__X.T)).reshape((self.__N + 1,))
                 alpha[output] = np.linalg.solve(chol[output].T,
                                      np.linalg.solve(chol[output],
                                      self.__Y[:, output] - mean))
@@ -446,6 +470,160 @@ class GP:
                                        self.__mean_jac, self.__Nx, self.__Ny)
         self.set_method(self.__gp_method)
 
+
+    def update_data_all(self, X_new, Y_new):
+        """ Update training data with all new observations
+
+        Will update training data with all samples, updating the
+        cholesky covariance matrix, alpha, inverse covariance, and re-build
+        the GP functions with the updated matrices.
+
+        # Arguments:
+            X_new: Input matrix with (n x Nx) new observations.
+            Y_new: Corresponding measurments (n x Ny) from input X_new.
+        """
+
+        X_new = np.array(X_new).copy()
+        Y_new = np.array(Y_new).copy()
+        n, D = X_new.shape
+
+        N_new = n
+
+        if self.__normalize:
+            Y_new = self.standardize(Y_new, self.__meanY, self.__stdY)
+            X_new = self.standardize(X_new, self.__meanZ, self.__stdZ)
+
+        print('\n________________________________________')
+        print('# Updating training data with ' + str(N_new) + ' new samples')
+        print('----------------------------------------')
+
+        """ Explore point with highest combined variance """
+        n, D = X_new.shape
+
+        """ Update matrices """
+        self.__X = np.vstack([self.__X, X_new])
+        self.__Y = np.vstack([self.__Y, Y_new])
+        self.__N = self.__X.shape[0]
+
+        N, D = self.__X.shape
+        hyper = self.__hyper
+
+        invK  = np.zeros((self.__Ny, N , N ))
+        alpha = np.zeros((self.__Ny, N ))
+        chol  = np.zeros((self.__Ny, N , N ))
+
+
+        for output in range(self.__Ny):
+            ell = self.__hyper_length_scales[output]
+            sf2 = self.__hyper_signal_variance[output]
+            sn2 = self.__hyper_noise_variance[output]
+            K_new   = self.covSEard(self.__X, self.__X, ell, sf2)
+
+            K = K_new + sn2 * np.eye(self.__N)
+            K = (K + K.T) * 0.5   # Make sure matrix is symmentric
+            try:
+                L = np.linalg.cholesky(K)
+            except np.linalg.LinAlgError:
+                print("K matrix is not positive definit, adding jitter!")
+                K = K + np.eye(N) * 1e-8
+                L = np.linalg.cholesky(K)
+            invL = np.linalg.solve(L, np.eye(self.__N))
+            invK[output, :, :] = np.linalg.solve(L.T, invL)
+            chol[output] = L
+            m = get_mean_function(ca.MX(hyper[output, :]), self.__X.T,
+                                    func=self.__mean_func)
+            mean = np.array(m(self.__X.T)).reshape((self.__N,))
+            alpha[output] = np.linalg.solve(L.T,
+                                    np.linalg.solve(L, self.__Y[:, output] - mean))
+
+        self.__alpha = alpha
+        self.__chol = chol
+        self.__invK = invK
+
+        # Rebuild GP with the new data
+        self.__mean, self.__var, self.__covar, self.__mean_jac = \
+                            build_gp(self.__invK, self.__X, self.__hyper,
+                                     self.__alpha, self.__chol)
+
+        self.__TA_covar = build_TA_cov(self.__mean, self.__covar,
+                                       self.__mean_jac, self.__Nx, self.__Ny)
+        self.set_method(self.__gp_method)
+
+
+    def replace_data_all(self, X_new, Y_new):
+        """ Replace training data with new observations
+
+        Will replace training data with new samples, replacing the
+        cholesky covariance matrix, alpha, inverse covariance, and re-build
+        the GP functions with the updated matrices.
+
+        # Arguments:
+            X_new: Input matrix with (n x Nx) new observations.
+            Y_new: Corresponding measurments (n x Ny) from input X_new.
+        """
+
+        X_new = np.array(X_new).copy()
+        Y_new = np.array(Y_new).copy()
+        n, D = X_new.shape
+
+        N_new = n
+
+        if self.__normalize:
+            Y_new = self.standardize(Y_new, self.__meanY, self.__stdY)
+            X_new = self.standardize(X_new, self.__meanZ, self.__stdZ)
+
+        print('\n________________________________________')
+        print('# Replacing training data with ' + str(N_new) + ' new samples')
+        print('----------------------------------------')
+
+        """ Update matrices """
+        self.__X = X_new
+        self.__Y = Y_new
+        self.__N = self.__X.shape[0]
+
+        N, D = self.__X.shape
+        hyper = self.__hyper
+
+        invK  = np.zeros((self.__Ny, N , N ))
+        alpha = np.zeros((self.__Ny, N ))
+        chol  = np.zeros((self.__Ny, N , N ))
+
+
+        for output in range(self.__Ny):
+            ell = self.__hyper_length_scales[output]
+            sf2 = self.__hyper_signal_variance[output]
+            sn2 = self.__hyper_noise_variance[output]
+            K_new   = self.covSEard(self.__X, self.__X, ell, sf2)
+
+            K = K_new + sn2 * np.eye(self.__N)
+            K = (K + K.T) * 0.5   # Make sure matrix is symmentric
+            try:
+                L = np.linalg.cholesky(K)
+            except np.linalg.LinAlgError:
+                print("K matrix is not positive definit, adding jitter!")
+                K = K + np.eye(N) * 1e-8
+                L = np.linalg.cholesky(K)
+            invL = np.linalg.solve(L, np.eye(self.__N))
+            invK[output, :, :] = np.linalg.solve(L.T, invL)
+            chol[output] = L
+            m = get_mean_function(ca.MX(hyper[output, :]), self.__X.T,
+                                    func=self.__mean_func)
+            mean = np.array(m(self.__X.T)).reshape((self.__N,))
+            alpha[output] = np.linalg.solve(L.T,
+                                    np.linalg.solve(L, self.__Y[:, output] - mean))
+
+        self.__alpha = alpha
+        self.__chol = chol
+        self.__invK = invK
+
+        # Rebuild GP with the new data
+        self.__mean, self.__var, self.__covar, self.__mean_jac = \
+                            build_gp(self.__invK, self.__X, self.__hyper,
+                                     self.__alpha, self.__chol)
+
+        self.__TA_covar = build_TA_cov(self.__mean, self.__covar,
+                                       self.__mean_jac, self.__Nx, self.__Ny)
+        self.set_method(self.__gp_method)
 
 
     def standardize(self, Y, mean, std):
@@ -633,7 +811,7 @@ class GP:
             y_sim[0] = x0
             y_t = x0
             for t in range(1, Nt + 1):
-                if feedback:
+                if 0: #feedback:
                     u_t = K @ (y_t - x_ref)
                 else:
                     u_t = u[t-1, :]
@@ -651,6 +829,8 @@ class GP:
         num_rows = int(np.ceil(Ny / num_cols))
         if xnames is None:
             xnames = ['State %d' % (i + 1) for i in range(Ny)]
+        if x_ref is not None:
+            x_sp = x_ref * np.ones((Nt+1, Ny))
 
         fontP = FontProperties()
         fontP.set_size('small')
@@ -658,6 +838,8 @@ class GP:
         for i in range(Ny):
             ax = fig.add_subplot(num_rows, num_cols, i + 1)
             ax.plot(t, y_sim[:, i], 'b-', label='Simulation')
+            if x_ref is not None:
+                ax.plot(t, x_sp[:, i], color='g', linestyle='--', label='Setpoint')
 
             for k in range(len(methods)):
                 mean_i = mean[k, :, i]
@@ -666,7 +848,7 @@ class GP:
                              label='GP ' + methods[k])
             ax.set_ylabel(xnames[i])
             ax.legend(prop=fontP, loc='best')
-            ax.set_xlabel('Time')
+            ax.set_xlabel('Time [s]')
     #        ax.set_ylim([-20,20])
         if title is not None:
             fig.canvas.set_window_title(title)

@@ -434,8 +434,8 @@ def train_gp_numpy(X, Y, meanFunc='zero', hyper_init=None, lam_x0=None, log=Fals
         meanF     = np.mean(Y[:, output])
         lb        = -np.inf * np.ones(num_hyp)
         ub        = np.inf * np.ones(num_hyp)
-        lb[:Nx]    = 1e-2
-        ub[:Nx]    = 1e2
+        lb[:Nx]    = 1-2
+        ub[:Nx]    = 2e2
         lb[Nx]     = 1e-8
         ub[Nx]     = 1e2
         lb[Nx + 1] = 10**-10

@@ -89,11 +89,7 @@ def inequality_constraints(x, covar, u, eps):
 
 
 
-solver_opts = {
-                'ipopt.linear_solver' : 'ma27',
-                'ipopt.max_cpu_time' : 30,
-                'expand' : True,
-}
+
 
 meanFunc = 'zero'
 dt = 3.0
@@ -107,21 +103,21 @@ uub = [60., 60.]
 xlb = [.0, .0, .0, .0]
 xub = [30., 30., 30., 30.]
 
-N = 40 # Number of training data
+N = 60 # Number of training data
 
 # Create simulation model
 model          = Model(Nx=Nx, Nu=Nu, ode=ode, dt=dt, R=R, clip_negative=True)
 X, Y           = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
-X_test, Y_test = model.generate_training_data(N, uub, ulb, xub, xlb, noise=True)
+X_test, Y_test = model.generate_training_data(100, uub, ulb, xub, xlb, noise=True)
 
 # Create GP model
-#gp = GP(X, Y, mean_func=meanFunc, normalize=False, xlb=xlb, xub=xub, ulb=ulb,
-#        uub=uub, optimizer_opts=solver_opts, multistart=1)
-#gp.update_data(X_test, Y_test, N_new=50)
-#gp.save_model('gp_tank')
-gp = GP.load_model('gp_tank')
+#gp = GP(X, Y, mean_func=meanFunc, normalize=True, xlb=xlb, xub=xub, ulb=ulb,
+#        uub=uub, optimizer_opts=None, multistart=1)
+#gp.save_model('gp_tank_final2')
+gp = GP.load_model('gp_tank_final2')
 gp.validate(X_test, Y_test)
 
+gp.print_hyper_parameters()
 
 # Limits in the MPC problem
 ulb = [10., 10.]
@@ -130,40 +126,47 @@ xlb = [7.5, 7.5, 3.5, 4.5]
 xub = [28., 28., 28., 28.]
 x_sp = np.array([14.0, 14.0, 14.2, 21.3])
 x0 = np.array([8., 10., 8., 19.])
-u0 = np.array([55, 55])
-u_test = np.full((20, 2), [35, 56])
+u0 = np.array([45, 45])
+u_test = np.full((30, 2), [45, 45])
 
-Q = np.diag([10, 10, 1, 1])
-P = np.diag([5, 5, .1, .1])
+Q = np.diag([20, 20, 10, 10])
+#Q = np.diag([10, 10, 1, 1])
 R = np.diag([1e-3, 1e-3])
 S = np.diag([.01, .01])
-model.check_rk4_stability(x0,u0)
+#model.check_rk4_stability(x0,u0)
 
-gp.predict_compare(x0, u_test, model, feedback=False, x_ref=x_sp, Q=Q, R=R)
-gp.predict_compare(x0, u_test, model, feedback=True, x_ref=x_sp, Q=Q, R=R)
+gp.predict_compare(x0, u_test, model, feedback=False)
+#gp.predict_compare(x0, u_test, model, feedback=True, x_ref=x_sp, Q=Q, R=R)
 
 #gp.update_data(X_test, Y_test, int(N*2))
 #gp.predict_compare(x0, u_test, model)
 #model.predict_compare(x0,u_test)
 #model.plot(x0, u_test)
 
+solver_opts = {
+               'ipopt.linear_solver' : 'ma27',
+               'ipopt.max_cpu_time' : 50,
+               'expand' : True,
+}
 
 # mpc = MPC(horizon=30*dt, gp=gp, model=model,
 #           gp_method='TA',
-#           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q, P=P, R=R, S=S,
+#           ulb=ulb, uub=uub, xlb=xlb, xub=xub, Q=Q,  R=R, S=S,
 #           terminal_constraint=None, costFunc='quad', feedback=True,
-#           solver_opts=solver_opts, discrete_method='rk4',
+#           solver_opts=solver_opts, discrete_method='gp',
 #           inequality_constraints=None
 #           )
-
-
-#x, u = mpc.solve(x0, u0=u0, sim_time=80*dt, x_sp=x_sp, debug=False, noise=True)
-#mpc.plot(xnames=['Tank 1 [cm]', 'Tank 2 [cm]','Tank 3 [cm]','Tank 4 [cm]'],
+#
+#
+# x, u = mpc.solve(x0, u0=u0, sim_time=80*dt, x_sp=x_sp, debug=False, noise=True)
+# mpc.plot(xnames=['Tank 1 [cm]', 'Tank 2 [cm]','Tank 3 [cm]','Tank 4 [cm]'],
 #        unames=['Pump 1 [ml/s]', 'Pump 2 [ml/s]'])
 
-#A, B = model.discrete_rk4_linearize(x0, u0)
-#K, S, E = lqr(A, B, Q, R)
-#Ad, Bd = gp.discrete_linearize(x0, u0, np.eye(6)*1e-5)
-#Kd, Sd, Ed = lqr(Ad, Bd, Q, R)
-#plot_eig(A)
-#eig = plot_eig(A - B @ K)
+A, B = model.discrete_linearize(x0, u0)
+# K, S, E = lqr(A, B, Q, R)
+plot_eig(A)
+Ad, Bd = gp.discrete_linearize(x0, u0, np.eye(6)*1e-5)
+# Kd, Sd, Ed = lqr(Ad, Bd, Q, R)
+plot_eig(Ad)
+# eig = plot_eig(A + B @ K)
+# eig = plot_eig(Ad + Bd @ Kd)
