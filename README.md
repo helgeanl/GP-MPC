@@ -9,7 +9,7 @@ The GP methods has been implemented using (Hewig et al., 2017) and (Deisenroth, 
 
 For simulation this framework support the solvers provided by CasADi and Sundails, (Hindmarsh et al., 2005) for both ODEs (CVODES), and DEAs (IDEAS). In addition this framework has implemented a simple Runga-Kutta 4 (RK4) method in CasADi for faster computation of the optimal control problem.
 
-As a model in the MPC algorithm it is possible to use an exact integrator from Sundails (CVODES, DEAS), RK4, GP, a hybrid model consisting of a GP estimating the dynamics and RK4 to integrate the kinematic equation based on the dynamic GP model, or a hybrid where the GP model estimates the noise and modeling error, similar to (Hewig et al., 2017).
+As a model in the MPC algorithm it is possible to use an exact integrator from Sundails (CVODES, IDAS), RK4, GP, a hybrid model consisting of a GP estimating the dynamics and RK4 to integrate the kinematic equation based on the dynamic GP model, or a hybrid where the GP model estimates the noise and modeling error, similar to (Hewig et al., 2017).
 
 
 
