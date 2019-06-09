@@ -11,7 +11,7 @@ For simulation this framework support the solvers provided by CasADi and Sundail
 
 As a model in the MPC algorithm it is possible to use an exact integrator from Sundails (CVODES, IDAS), RK4, GP, a hybrid model consisting of a GP estimating the dynamics and RK4 to integrate the kinematic equation based on the dynamic GP model, or a hybrid where the GP model estimates the noise and modeling error, similar to (Hewig et al., 2017).
 
-This work was developed as a part of the master thesis [Cautious MPC-based control with Machine Learning](https://brage.bibsys.no/xmlui/handle/11250/2572395 "Link to master thesis") (Langåker, 2018).
+This work was developed as a part of the master thesis [Cautious MPC-based control with Machine Learning](https://ntnuopen.ntnu.no/ntnu-xmlui/handle/11250/2572395 "Link to master thesis") (Langåker, 2018).
 
  
 
